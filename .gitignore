@@ -1,0 +1,20 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+logs/
+saves/
+node_modules/
+*.db
+*.sqlite3
+
+# Local debugging screenshots (may show credentials/URLs)
+errors_ss/
+
+# Per-user Claude Code settings
+.claude/settings.local.json
+*.egg-info/
+
+# Local-only Claude workflow notes (not part of the app)
+docs/agent-teams-*.md
