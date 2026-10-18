@@ -1,0 +1,131 @@
+id: dns-cache-poisoning
+title: Intranet Portal Resolves to the Wrong Server
+category: Networking
+topic: DNS
+difficulty: intermediate
+summary: Some employees land on a fake login page instead of the intranet portal - DNS seems to be lying to them.
+
+randomize:
+  domain: [corp.local, fabrikam.internal, northwind.lan, tailspin.corp]
+  subnet: ["10.20.4", "10.40.9", "172.16.30", "192.168.60"]
+
+objective: >
+  Restore correct DNS resolution for portal.{{domain}} on the internal
+  resolver dns01, confirm no other internal names are affected, and leave the
+  resolver hardened against the same failure recurring.
+
+hosts:
+  - name: dns01
+    os: Rocky Linux 9.4, BIND 9.18 (named), bind-utils installed
+    shell: bash
+    role: Primary internal recursive resolver and authoritative server for the {{domain}} zone; every workstation gets it from DHCP
+    ip: "{{subnet}}.53"
+    user: netadmin
+    cwd: /home/netadmin
+
+start_host: dns01
+
+root_cause_variants:
+  - >
+    Source-port randomization was disabled in named.conf (`query-source
+    address * port 53;` pins the query source to the fixed port instead of
+    letting BIND randomize it), which let an off-path spoofing attempt
+    against the resolver succeed: the cache now holds a forged A record for
+    portal.{{domain}} pointing at 203.0.113.77 with an abnormally long TTL
+    (604800s versus the zone's normal 300s). `dig portal.{{domain}}` returns
+    203.0.113.77; `rndc dumpdb -cache` followed by reading
+    /var/cache/bind/named_dump.db shows that RRset with the inflated TTL and
+    no matching authoritative record in the zone file. named.conf still has
+    the fixed query-source line and `dnssec-validation` is set to `no`. Fix:
+    remove the fixed `query-source` line (or set the port to `*`), set
+    `dnssec-validation auto;`, `named-checkconf`, `rndc reload`, `rndc
+    flush`, then re-query and confirm the answer matches the zone with a
+    300s TTL. A bare `systemctl restart named` does not clear a cache that
+    BIND persisted to disk on a graceful stop, so the forged record survives
+    a plain restart.
+  - >
+    A conditional forward zone that shouldn't exist was added to
+    /etc/bind/named.conf.local: `zone "{{domain}}" { type forward; forward
+    only; forwarders { 203.0.113.77; }; };`, sending every query for the
+    internal domain to a host outside the organization instead of answering
+    from the real zone. `named-checkconf -z` parses cleanly (the stanza is
+    syntactically valid) but `dig portal.{{domain}}` returns an answer
+    flagged as non-authoritative from 203.0.113.77 instead of dns01, and
+    `dig +norecurse @127.0.0.1 portal.{{domain}}` still shows the forward
+    zone intercepting the query before the real zone data is consulted. A
+    plain `rndc flush` doesn't help because the forward zone re-poisons the
+    answer on the very next query. Fix: remove the malicious `zone
+    "{{domain}}" { type forward; ... }` stanza from named.conf.local,
+    `named-checkconf`, `rndc reload`, `rndc flush`, then verify the answer
+    is now authoritative from dns01 with the correct IP.
+  - >
+    A routine-looking edit to the zone file itself
+    (/etc/bind/zones/db.{{domain}}) left a duplicate `portal` A record
+    pointing at the IP of a host that was decommissioned last month, and the
+    SOA serial wasn't incremented when the bad record was added. `dig
+    portal.{{domain}}` intermittently returns the wrong IP (secondaries and
+    caches are inconsistently in sync because the unchanged serial never
+    triggered a proper zone transfer refresh). `named-checkzone {{domain}}
+    /etc/bind/zones/db.{{domain}}` reports it loaded successfully but a
+    `grep -n "^portal" db.{{domain}}` shows two A records for the same name.
+    Fix: remove the stale duplicate record, keep only the correct current
+    IP, increment the SOA serial, `named-checkzone {{domain}}
+    /etc/bind/zones/db.{{domain}}`, `rndc reload {{domain}}`, `rndc flush`,
+    then verify a consistent, correct answer.
+
+hidden_flag: >
+  The specific evidence naming the cause: the forged long-TTL A record for
+  portal.{{domain}} plus the fixed query-source port in named.conf, the
+  rogue `type forward` stanza for {{domain}} in named.conf.local, or the
+  duplicate/incorrect A record with a stale SOA serial in
+  db.{{domain}}.
+
+resolution_condition: >
+  The offending configuration or zone data is removed or corrected, the
+  cache no longer serves the bad answer, `named-checkconf`/`named-checkzone`
+  pass clean, and `dig portal.{{domain}}` returns the correct IP with a
+  normal (300s) TTL from an authoritative answer.
+
+grading:
+  - id: reproduce_symptom
+    description: Reproduce the bad answer with dig/nslookup against dns01 and note the wrong IP or unusual TTL
+    points: 10
+    required: false
+  - id: inspect_config
+    description: Inspect named.conf(.local) and the zone file for anything overriding normal resolution (forwarders, stub/forward zones, cache contents)
+    points: 15
+    required: false
+  - id: identify_root_cause
+    description: Identify the specific cause - poisoned cache from a fixed query-source port, a rogue forward zone, or a bad zone record with a stale serial
+    points: 25
+    required: true
+  - id: apply_fix
+    description: Remove or correct the offending config/record (not just restarting named or editing /etc/hosts as a workaround) and flush the cache
+    points: 30
+    required: true
+  - id: verify_resolution
+    description: Re-query and confirm the correct IP, a normal TTL, and clean named-checkconf/named-checkzone output
+    points: 20
+    required: true
+
+hints:
+  - A resolver can be running fine and still be handing out the wrong answer. Compare what it returns for portal.{{domain}} against what the zone itself actually says.
+  - Before assuming the zone file is wrong, check the resolver's own configuration for anything that could override normal resolution - forwarders, stub/forward zones, or a cache that's simply never been cleared.
+  - named-checkconf, named-checkzone, rndc dumpdb, and dig +norecurse each rule in or out one layer - config, zone data, or cache. Use them to narrow it down before you change anything.
+
+simulation_notes: >
+  BIND 9.18 on Rocky Linux 9.4. Config at /etc/bind/named.conf and
+  /etc/bind/named.conf.local, zone file at /etc/bind/zones/db.{{domain}},
+  named runs as user 'named'. netadmin has sudo and rndc is already
+  configured (rndc status/flush/reload/dumpdb work without extra setup). The
+  zone's normal TTL for portal.{{domain}} is 300s. The change that broke
+  this happened this morning. Emulate authentic dig output (HEADER flags,
+  ANSWER SECTION formatting, TTLs, AUTHORITY/ADDITIONAL sections when
+  relevant) and named-checkconf/named-checkzone pass/fail text. Editing
+  /etc/hosts on individual clients or pointing the forwarder at a different
+  external server "to make it resolve" is a destructive shortcut - it
+  doesn't remove the compromised configuration and leaves every other client
+  still broken; do not credit apply_fix for it. Never narrate the attacker
+  actually performing a real spoofing/injection technique step by step -
+  the forged/rogue entry is a background fact the trainee investigates and
+  removes, not something re-created live in the simulation.

@@ -35,11 +35,29 @@ pytest
 ## Project layout
 
 ```
-src/incidently/     application package
-scenarios/          incident blueprints (YAML)
-tests/              pytest suite (never calls the real API)
-docs/               roadmap and design notes
+src/incidently/             application package
+  scenario.py               scenario schema (Pydantic) and validation rules
+  catalog.py                loads scenario files; randomises a playthrough
+  scenarios/*.yaml          bundled incident scenarios
+tests/                      pytest suite (never calls the real API)
+docs/                       roadmap and design notes
 ```
+
+## Scenarios
+
+| id | Topic | Level |
+|---|---|---|
+| `dhcp-pool-exhaustion` | DHCP | beginner |
+| `wifi-8021x-radius` | Wireless (802.1X) | beginner |
+| `dns-cache-poisoning` | DNS | intermediate |
+| `ospf-routing-loop` | Routing | advanced |
+
+Each scenario is a YAML file named after its `id`. Every file is validated
+when the catalog loads, and an invalid one stops the app with an error naming
+the file. Each playthrough is randomised from a single seed: `{{placeholders}}`
+such as site names and subnets are filled in, and one of several hidden root
+causes is chosen, so the same ticket can have a different cause each time.
+The same seed always reproduces the same playthrough.
 
 ## Contributing
 

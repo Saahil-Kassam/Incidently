@@ -38,6 +38,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 - **Loader + validation**: load `scenarios/*.yaml`, fail fast with clear errors on bad files.
 - **Randomiser**: fill `{{placeholders}}` and pick a hidden root-cause variant; optional seed for reproducibility.
 - **Networking scenarios**: copy the 4 networking YAMLs from `NetSim/scenarios/` (06 wifi, 07 dns, 08 dhcp, 02 ospf), adapted to the schema.
+- *As built:* scenarios ship inside the package (`src/incidently/scenarios/`) so they work from any install, and YAML is parsed with `ruamel.yaml` because PyYAML has no Python 3.15 wheels.
 - **Content tests**: every scenario validates; no placeholders left unfilled.
 
 ### Milestone 2 — LLM client

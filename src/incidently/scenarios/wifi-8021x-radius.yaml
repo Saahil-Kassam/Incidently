@@ -1,0 +1,99 @@
+id: wifi-8021x-radius
+title: Corporate Wi-Fi 802.1X Outage
+category: Networking
+topic: Wireless (802.1X)
+difficulty: beginner
+summary: Nobody can join the CORP-SECURE SSID; laptops keep prompting for credentials.
+
+randomize:
+  site: [HQ, Building-C, Riverside, Campus-North]
+  realm: [corp.example.com, ad.acme.io, int.globex.net]
+
+objective: >
+  Restore 802.1X (PEAP-MSCHAPv2) authentication for the CORP-SECURE SSID at
+  {{site}} by fixing the FreeRADIUS server, then confirm that users can
+  authenticate.
+
+hosts:
+  - name: radius01
+    os: Ubuntu Server 24.04 LTS, FreeRADIUS 3.2.5
+    shell: bash
+    role: Primary RADIUS server for wireless 802.1X; proxies MSCHAPv2 to AD via ntlm_auth (winbind joined to {{realm}})
+    ip: 10.50.0.15
+    user: netadmin
+    cwd: /home/netadmin
+
+start_host: radius01
+
+root_cause_variants:
+  - >
+    The server certificate /etc/freeradius/3.0/certs/server.pem used by the EAP
+    module expired at 00:00 UTC today. Clients reject the TLS tunnel (radiusd
+    log: "TLS Alert read:fatal:certificate expired" / eap_peap failures). Fix:
+    install the renewed cert already issued and waiting in
+    /home/netadmin/renewal/ (radius01-2026.pem + key), update the eap module
+    paths or replace files, check with openssl x509 -enddate, restart
+    freeradius.
+  - >
+    The wireless controller was replaced last night and its new management IP
+    10.50.0.40 is not in clients.conf (the old controller was 10.50.0.4), so
+    radiusd logs "Ignoring request to auth address * port 1812 from unknown client
+    10.50.0.40". Fix: add a client block for 10.50.0.40 with the correct shared
+    secret (stored in /root/wlc-secret.txt readable via sudo), freeradius -XC to
+    check config, restart.
+  - >
+    winbind lost the domain trust: the machine account password for radius01 in
+    {{realm}} was reset by an AD cleanup script. ntlm_auth fails with
+    NT_STATUS_NO_TRUST_SAM_ACCOUNT / "Reading winbind reply failed", so every
+    MSCHAPv2 auth is rejected. Fix: re-join (net ads join -U <admin>) or
+    net ads changetrustpw, restart winbind, verify with wbinfo -t and ntlm_auth,
+    then test.
+
+hidden_flag: >
+  The log line or check that proves the cause: the expired notAfter date on the
+  server certificate, the 'unknown client 10.50.0.40' log line, or wbinfo -t /
+  ntlm_auth trust failure.
+
+resolution_condition: >
+  The root cause is corrected, freeradius is running with a valid config, and a
+  test authentication (radtest/eapol_test) or the log shows Access-Accept for a
+  real user.
+
+grading:
+  - id: check_service
+    description: Check the freeradius service status and logs (systemctl, journalctl, /var/log/freeradius/radius.log)
+    points: 15
+    required: false
+  - id: debug_or_test
+    description: Use freeradius -X / radtest / eapol_test to observe an authentication attempt
+    points: 15
+    required: false
+  - id: identify_root_cause
+    description: Identify the specific root cause with evidence
+    points: 25
+    required: true
+  - id: apply_fix
+    description: Apply the correct fix with a config check before restarting
+    points: 25
+    required: true
+  - id: verify_resolution
+    description: Verify Access-Accept for a test user after the fix
+    points: 20
+    required: true
+
+hints:
+  - The RADIUS server log records why each request was accepted, rejected, or ignored. Start there.
+  - Work through the chain in order - the controller reaches RADIUS, the TLS tunnel is set up, then credentials are checked against AD. Where does it break?
+  - Useful tools are openssl x509 -enddate, grep in clients.conf, wbinfo -t, and radtest.
+
+simulation_notes: >
+  Outage began at about 07:05 local, when users arrived at {{site}}. Running
+  `freeradius -X` in the foreground would block. Treat it as the trainee
+  stopping the service and capturing about 30 seconds of debug output from one
+  failed authentication, then Ctrl+C, and note that the service is now stopped
+  until they start it again. netadmin has sudo. Test user credentials for radtest:
+  svc.wifitest / (stored in /home/netadmin/wifitest.txt). Switching CORP-SECURE
+  to an open network or a pre-shared key, or disabling certificate/EAP validation,
+  would make clients connect but is a destructive shortcut that abandons 802.1X
+  entirely rather than fixing the outage - flag it and do not credit apply_fix
+  for it.
