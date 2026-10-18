@@ -38,6 +38,9 @@ pytest
 src/incidently/             application package
   scenario.py               scenario schema (Pydantic) and validation rules
   catalog.py                loads scenario files; randomises a playthrough
+  config.py                 settings from environment variables / .env
+  llm.py                    the only code that calls the Anthropic API
+  fake_llm.py               scripted stand-in model for tests and offline use
   scenarios/*.yaml          bundled incident scenarios
 tests/                      pytest suite (never calls the real API)
 docs/                       roadmap and design notes
@@ -58,6 +61,31 @@ the file. Each playthrough is randomised from a single seed: `{{placeholders}}`
 such as site names and subnets are filled in, and one of several hidden root
 causes is chosen, so the same ticket can have a different cause each time.
 The same seed always reproduces the same playthrough.
+
+## Configuration
+
+Settings are environment variables, read from a local `.env` file if present.
+`.env.example` lists them all with their defaults.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | none | Your API key (not needed with the fake model) |
+| `INCIDENTLY_MODEL` | `claude-opus-5-5` | Model for every call |
+| `INCIDENTLY_TURN_EFFORT` | `low` | Effort per simulated command; favours speed |
+| `INCIDENTLY_DEEP_EFFORT` | `high` | Effort for setup and grading; favours quality |
+| `INCIDENTLY_FAKE_LLM` | `0` | `1` uses a scripted fake model and never calls the API |
+| `INCIDENTLY_API_MAX_RETRIES` | `4` | Retries for rate limits, 5xx errors, and network drops |
+| `INCIDENTLY_API_TIMEOUT` | `120` | Seconds per API request |
+
+### How model calls work
+
+Every call asks for a specific Pydantic model and uses structured outputs, so
+the reply must match its JSON schema. The reply is then validated locally. If
+it is cut off, the request is retried with a larger token limit; if it is empty
+or invalid, it is retried (three attempts in total). Rate limits, server errors,
+and network drops are retried by the Anthropic SDK with exponential backoff. If
+a safety classifier declines a request, the API re-runs it on a fallback model
+(`fallbacks: "default"`).
 
 ## Contributing
 

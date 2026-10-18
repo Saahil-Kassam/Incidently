@@ -46,6 +46,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 - **Strict JSON replies**: structured outputs from Pydantic schemas (`CommandResult`, etc.), validate and re-ask on bad/truncated replies.
 - **Resilience**: tenacity retries with backoff for 429/5xx/529/timeouts; clear error on bad key.
 - **Fake LLM**: scripted stand-in for tests and offline UI work (`INCIDENTLY_FAKE_LLM=1`).
+- *As built:* transient API errors use the Anthropic SDK's built-in retries with backoff (configurable via `INCIDENTLY_API_MAX_RETRIES`) instead of tenacity, so there's one retry layer, not two. Refusals use the API's server-side fallback. The fake LLM is scripted per test; Milestone 3 adds default scripts for offline play.
 
 ### Milestone 3 — Simulation engine
 - **Session state**: hosts, active host / SSH chain, user, cwd, IOS mode, service changes, invented facts, command history.
