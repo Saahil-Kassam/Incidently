@@ -27,9 +27,18 @@ class Reply(BaseModel):
     exit_code: int = Field(ge=0)
 
 
-def message(text="", stop_reason="end_turn", model="claude-opus-5-5", category=None):
-    msg = SimpleNamespace(
-        content=[SimpleNamespace(type="text", text=text)] if text else [],
+def message(
+    text="",
+    stop_reason="end_turn",
+    model="claude-opus-5-5",
+    category=None,
+    content=None,
+    iterations=None,
+):
+    if content is None:
+        content = [SimpleNamespace(type="text", text=text)] if text else []
+    return SimpleNamespace(
+        content=content,
         stop_reason=stop_reason,
         stop_details=SimpleNamespace(category=category) if category else None,
         model=model,
@@ -38,10 +47,9 @@ def message(text="", stop_reason="end_turn", model="claude-opus-5-5", category=N
             output_tokens=20,
             cache_read_input_tokens=50,
             cache_creation_input_tokens=None,
+            iterations=iterations,
         ),
     )
-    msg._request_id = "req_123"
-    return msg
 
 
 class StubClient:
@@ -61,6 +69,10 @@ class StubClient:
 
 
 class _Stream:
+    # The real SDK exposes the request id on the stream (from the response
+    # headers), not on the final message.
+    request_id = "req_123"
+
     def __init__(self, result):
         self._result = result
 
@@ -133,9 +145,34 @@ def test_no_fallback_params_for_models_without_server_side_fallback():
     assert "betas" not in client.calls[0]
 
 
-def test_served_model_is_reported_after_a_fallback():
-    llm, _ = make_llm(message('{"stdout": "", "exit_code": 0}', model="claude-opus-5"))
-    assert generate(llm).model == "claude-opus-5"
+def test_no_fallback_reported_when_the_requested_model_served():
+    iterations = [SimpleNamespace(type="message")]
+    llm, _ = make_llm(message('{"stdout": "", "exit_code": 0}', iterations=iterations))
+    result = generate(llm)
+    assert result.fell_back is False
+    assert result.model == "claude-opus-5-5"
+
+
+def test_fallback_is_reported_with_the_serving_model():
+    # What the live API returned in the Milestone 2 smoke test: no fallback
+    # block, just a fallback_message iteration naming the serving model.
+    iterations = [SimpleNamespace(type="fallback_message", model="claude-opus-4-8")]
+    llm, _ = make_llm(
+        message('{"stdout": "", "exit_code": 0}', model="claude-opus-4-8", iterations=iterations)
+    )
+    result = generate(llm)
+    assert result.fell_back is True
+    assert result.model == "claude-opus-4-8"
+
+
+def test_text_before_a_fallback_block_is_discarded():
+    content = [
+        SimpleNamespace(type="text", text='{"stdout": "partial'),
+        SimpleNamespace(type="fallback"),
+        SimpleNamespace(type="text", text='{"stdout": "from fallback", "exit_code": 0}'),
+    ]
+    llm, _ = make_llm(message(content=content))
+    assert generate(llm).output.stdout == "from fallback"
 
 
 # --- re-asking on bad replies -----------------------------------------------
@@ -223,6 +260,19 @@ def test_api_errors_are_translated(error, expected, match):
     with pytest.raises(expected, match=match):
         generate(llm)
     assert len(client.calls) == 1  # SDK already retried; we don't retry again
+
+
+def test_missing_credentials_are_a_config_error():
+    # Raised by the SDK while building headers when no key is configured.
+    llm, _ = make_llm(TypeError('"Could not resolve authentication method. Expected ..."'))
+    with pytest.raises(LLMConfigError, match="ANTHROPIC_API_KEY"):
+        generate(llm)
+
+
+def test_unrelated_type_errors_are_not_hidden():
+    llm, _ = make_llm(TypeError("unexpected keyword argument 'fallbacks'"))
+    with pytest.raises(TypeError, match="fallbacks"):
+        generate(llm)
 
 
 # --- factory ----------------------------------------------------------------

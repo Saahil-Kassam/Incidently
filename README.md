@@ -85,7 +85,15 @@ it is cut off, the request is retried with a larger token limit; if it is empty
 or invalid, it is retried (three attempts in total). Rate limits, server errors,
 and network drops are retried by the Anthropic SDK with exponential backoff. If
 a safety classifier declines a request, the API re-runs it on a fallback model
-(`fallbacks: "default"`).
+(`fallbacks: "default"`). When that happens the result reports the model that
+actually served it (`LLMResult.model`, `LLMResult.fell_back`), and the log line
+for the call shows `fallback=True`.
+
+Host simulation prompts can trip the classifier: in testing,
+`claude-opus-5-5` requests were served by `claude-opus-4-8`. The game still
+works; set `INCIDENTLY_MODEL` to pick a different model.
+
+`.env` is looked up from the folder you start the app in (and its parents).
 
 ## Contributing
 

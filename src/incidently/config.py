@@ -11,7 +11,7 @@ import os
 from collections.abc import Mapping
 from typing import Literal
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
@@ -66,7 +66,10 @@ class Settings(BaseModel):
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
         """Build settings from ``environ`` (default: ``.env`` plus ``os.environ``)."""
         if environ is None:
-            load_dotenv(override=False)  # real environment variables win over .env
+            # Search from the working directory rather than from this module's
+            # install location, so the .env where the app is started is found.
+            # Real environment variables win over values in the file.
+            load_dotenv(find_dotenv(usecwd=True), override=False)
             environ = os.environ
         values = {
             field: environ[var].strip()

@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from incidently.config import DEFAULT_MODEL, ConfigError, Settings
@@ -60,6 +62,16 @@ def test_fake_llm_falsy_values(value):
 def test_invalid_values_name_the_variable(env, names):
     with pytest.raises(ConfigError, match=names):
         Settings.from_env(env)
+
+
+def test_dotenv_is_found_in_the_working_directory(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("INCIDENTLY_TURN_EFFORT=medium\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INCIDENTLY_TURN_EFFORT", raising=False)
+    try:
+        assert Settings.from_env().turn_effort == "medium"
+    finally:
+        os.environ.pop("INCIDENTLY_TURN_EFFORT", None)  # load_dotenv wrote it
 
 
 def test_settings_are_immutable():

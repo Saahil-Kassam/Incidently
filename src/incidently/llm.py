@@ -84,9 +84,10 @@ class Usage:
 class LLMResult(Generic[T]):
     output: T
     usage: Usage
-    model: str
+    model: str  # the model that actually served the reply
     request_id: str | None = None
     attempts: int = 1
+    fell_back: bool = False  # True when a fallback model served it, not the configured one
 
 
 @dataclass(frozen=True)
@@ -138,15 +139,17 @@ class AnthropicLLM:
         problem = "no attempts made"
 
         for attempt in range(1, REPLY_ATTEMPTS + 1):
-            message = self._call(system, messages, output_format, effort, max_tokens)
+            message, request_id = self._call(system, messages, output_format, effort, max_tokens)
             usage += _usage(message)
-            request_id = getattr(message, "_request_id", None)
+            fell_back = _fell_back(message)
             log.info(
-                "llm reply schema=%s attempt=%d stop=%s model=%s request_id=%s in=%d out=%d",
+                "llm reply schema=%s attempt=%d stop=%s model=%s fallback=%s request_id=%s "
+                "in=%d out=%d",
                 schema.__name__,
                 attempt,
                 message.stop_reason,
                 message.model,
+                fell_back,
                 request_id,
                 message.usage.input_tokens,
                 message.usage.output_tokens,
@@ -161,7 +164,7 @@ class AnthropicLLM:
                 max_tokens = min(max_tokens * 2, MAX_TOKENS_CEILING)
                 continue
 
-            text = "".join(b.text for b in message.content if b.type == "text").strip()
+            text = _reply_text(message)
             if not text:
                 problem = "reply contained no text"
                 continue
@@ -174,7 +177,7 @@ class AnthropicLLM:
                 )
                 continue
 
-            return LLMResult(output, usage, message.model, request_id, attempt)
+            return LLMResult(output, usage, message.model, request_id, attempt, fell_back)
 
         raise LLMResponseError(
             f"no valid {schema.__name__} after {REPLY_ATTEMPTS} attempts: {problem}"
@@ -187,7 +190,8 @@ class AnthropicLLM:
         output_format: dict[str, Any],
         effort: Effort,
         max_tokens: int,
-    ) -> Any:
+    ) -> tuple[Any, str | None]:
+        """Return the final message and its request id (read from the stream)."""
         try:
             # Streaming avoids HTTP timeouts on long replies; we only need the
             # final message here, so the stream is drained by the SDK helper.
@@ -199,7 +203,13 @@ class AnthropicLLM:
                 output_config={"effort": effort, "format": output_format},
                 **self._fallback_params(),
             ) as stream:
-                return stream.get_final_message()
+                return stream.get_final_message(), stream.request_id
+        except TypeError as exc:
+            # With no credentials at all, the SDK raises a plain TypeError when it
+            # builds the request headers.
+            if "authentication method" not in str(exc):
+                raise
+            raise LLMConfigError(_credentials_hint(exc)) from exc
         except (
             anthropic.AuthenticationError,
             anthropic.PermissionDeniedError,
@@ -243,6 +253,33 @@ def _usage(message: Any) -> Usage:
         cache_read_input_tokens=getattr(u, "cache_read_input_tokens", None) or 0,
         cache_creation_input_tokens=getattr(u, "cache_creation_input_tokens", None) or 0,
     )
+
+
+def _fell_back(message: Any) -> bool:
+    """Whether a fallback model served the reply instead of the requested one.
+
+    The API signals this with a ``fallback_message`` entry in
+    ``usage.iterations``. A ``fallback`` content block alone is not enough: it
+    only appears when the requested model started answering and then declined.
+    """
+    iterations = getattr(message.usage, "iterations", None) or []
+    return any(getattr(i, "type", None) == "fallback_message" for i in iterations)
+
+
+def _reply_text(message: Any) -> str:
+    """The text of the final answer, without output from a model that declined.
+
+    A ``fallback`` block marks where a declining model's partial output ends
+    and the fallback model's answer begins, so only text after the last one
+    counts.
+    """
+    parts: list[str] = []
+    for block in message.content:
+        if block.type == "fallback":
+            parts.clear()
+        elif block.type == "text":
+            parts.append(block.text)
+    return "".join(parts).strip()
 
 
 def _credentials_hint(exc: Exception) -> str:
