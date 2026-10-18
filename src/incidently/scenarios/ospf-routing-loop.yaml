@@ -1,0 +1,123 @@
+id: ospf-routing-loop
+title: Branch Routing Loop
+category: Networking
+topic: Routing
+difficulty: advanced
+summary: A branch office lost access to the data center and traceroutes bounce between two core routers.
+
+randomize:
+  branch: ["10.44", "10.61", "10.88"]
+  dc_net: ["172.20.0.0", "172.24.0.0", "172.28.0.0"]
+  branch_name: [dallas, denver, raleigh, boise]
+
+objective: >
+  Branch office {{branch_name}} ({{branch}}.0.0/16) can't reach data center
+  services in {{dc_net}}/16. Find and remove the routing loop between the
+  core routers, restore reachability, and confirm a clean path.
+
+hosts:
+  - name: noc-jump01
+    os: Rocky Linux 9.4
+    shell: bash
+    role: NOC jump host with SSH access to network devices; has traceroute, mtr, ping
+    ip: 10.255.0.10
+    user: netops
+    cwd: /home/netops
+  - name: core-rtr1
+    os: Cisco IOS XE 17.9.4a (ISR 4451)
+    shell: cisco-ios
+    role: Core router A - OSPF area 0, EIGRP AS 100 toward branches, redistributes between them
+    ip: 10.255.0.1
+    user: netops
+    cwd: ""
+  - name: core-rtr2
+    os: Cisco IOS XE 17.9.4a (ISR 4451)
+    shell: cisco-ios
+    role: Core router B - OSPF area 0, EIGRP AS 100 toward branches, redistributes between them
+    ip: 10.255.0.2
+    user: netops
+    cwd: ""
+
+start_host: noc-jump01
+
+root_cause_variants:
+  - >
+    Mutual redistribution without route tags or filtering: both core routers
+    redistribute EIGRP into OSPF and OSPF back into EIGRP. After a branch WAN
+    link flap this morning, core-rtr2 re-learned {{branch}}.0.0/16 as an OSPF E2
+    route (from core-rtr1's redistribution, AD 110), which beats its EIGRP
+    external route (AD 170). core-rtr2 points to core-rtr1, and core-rtr1, whose
+    EIGRP path is now fed back from core-rtr2's redistribution, points back to
+    core-rtr2. Fix: tag routes on redistribution and deny tagged routes on the
+    way back (route-map), or raise the OSPF external distance above 170, then
+    clear ip route {{branch}}.0.0 and verify.
+  - >
+    A floating static route for {{branch}}.0.0/16 on core-rtr1, meant as a
+    backup with AD 250, was mistyped during last night's change as AD 5 with
+    next hop core-rtr2 (10.255.12.2). core-rtr1 also has `redistribute static
+    subnets` under router ospf 1, so it advertises the prefix to core-rtr2 as
+    O E2 (AD 110), which beats core-rtr2's EIGRP external route (AD 170).
+    core-rtr1 sends to core-rtr2, and core-rtr2 sends back. Fix: correct the
+    static's AD to 250 (or remove it) on core-rtr1, then verify that both
+    routers use EIGRP again.
+  - >
+    core-rtr1's WAN link to the branch has been down since 05:50 because of a
+    carrier outage (a legitimate failure that should simply fail over).
+    core-rtr1 falls back to its default route toward core-rtr2. But core-rtr2
+    has a forgotten static `ip route {{branch}}.0.0 255.255.0.0 10.255.12.1` (AD 1)
+    left over from a 2023 migration, which points back at core-rtr1 and
+    overrides its own healthy EIGRP path over its WAN link. Fix: remove the stale
+    static on core-rtr2 so it uses EIGRP via 10.254.2.2, then verify. (The
+    carrier outage itself stays open with the provider.)
+
+hidden_flag: >
+  `show ip route {{branch}}.0.0` (or equivalent) on BOTH routers showing each
+  one's next hop is the other router, plus the configuration element causing it
+  (untagged mutual redistribution, the AD-5 static being redistributed, or the stale static on core-rtr2).
+
+resolution_condition: >
+  Both core routers route {{branch}}.0.0/16 via the EIGRP path toward the branch,
+  the offending configuration is corrected, and a traceroute from noc-jump01 to
+  a branch host reaches the destination without bouncing.
+
+grading:
+  - id: confirm_loop
+    description: Demonstrate the loop with traceroute/mtr showing packets alternating between the core routers
+    points: 15
+    required: false
+  - id: inspect_routing_tables
+    description: Inspect the routing table entry for the branch prefix on both core routers
+    points: 20
+    required: false
+  - id: identify_root_cause
+    description: Find the specific configuration causing the loop (show run section, redistribution, statics, distance)
+    points: 20
+    required: true
+  - id: apply_fix
+    description: Correct the configuration on the right router with a targeted change
+    points: 25
+    required: true
+  - id: verify_resolution
+    description: Verify with routing table and a clean traceroute from the jump host
+    points: 15
+    required: true
+  - id: save_config
+    description: Save the running config (write memory / copy run start) after verifying
+    points: 5
+    required: false
+
+hints:
+  - Traceroute tells you where packets go; the routing table tells you why. Look at both core routers.
+  - Compare the route source, administrative distance, and next hop for the branch prefix on each router.
+  - Something recently changed that makes one router prefer a route learned from the other. Look at redistribution, static routes, and distance settings.
+
+simulation_notes: >
+  The branch router redistributes its connected LAN into EIGRP, so when healthy
+  the branch prefix appears on the core routers as D EX (AD 170). The branch
+  file server branch-fs01 is {{branch}}.10.20. Core routers connect to each other on 10.255.12.0/30 (rtr1 .1, rtr2 .2) and to the branch
+  over WAN links 10.254.1.0/30 (rtr1) and 10.254.2.0/30 (rtr2). SSH from
+  noc-jump01 to core routers works with 'ssh core-rtr1'. Show full IOS XE output
+  formats (show ip route codes legend, show ip ospf, show ip eigrp topology,
+  show running-config | section router). Traceroute from the jump host should
+  show TTL-exceeded ping-pong between 10.255.12.1 and 10.255.12.2 while broken.
+  Reloading a core router is destructive and does not fix the config.

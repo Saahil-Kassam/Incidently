@@ -1,0 +1,128 @@
+id: dhcp-pool-exhaustion
+title: New Laptops Can't Get an IP Address
+category: Networking
+topic: DHCP
+difficulty: beginner
+summary: New and reconnecting laptops sit at "obtaining IP address" and never join the network - the DHCP pool looks exhausted.
+
+randomize:
+  site: [HQ, Riverside, Building-C, Campus-North]
+  subnet: ["10.20.4", "10.40.9", "172.16.30", "192.168.60"]
+
+objective: >
+  Get new and reconnecting laptops at {{site}} a working address from the
+  {{subnet}}.0/24 scope again, find out why the pool ran out, and leave DHCP
+  healthy for the rest of the day.
+
+hosts:
+  - name: dhcp01
+    os: Ubuntu Server 24.04 LTS, isc-dhcp-server 4.4.3
+    shell: bash
+    role: Primary DHCP server for the {{site}} corporate VLAN, scope {{subnet}}.0/24 (sized for about 200 devices)
+    ip: "{{subnet}}.5"
+    user: netadmin
+    cwd: /home/netadmin
+
+start_host: dhcp01
+
+root_cause_variants:
+  - >
+    default-lease-time and max-lease-time were left at 300 (5 minutes) after
+    a template mistake during last week's config refresh, instead of a
+    normal 8-hour workday lease. Combined with modern phones and laptops
+    randomizing their MAC address for privacy (a new "device" lease every
+    time one reconnects or rotates its address), lease churn is now so high
+    that the scope stays effectively full even though the real device count
+    at {{site}} hasn't grown. `journalctl -u isc-dhcp-server -n 50` shows
+    repeated `DHCPNAK` / `no free leases` for new DHCPDISCOVERs, and
+    `/var/lib/dhcp/dhcpd.leases` has far more `binding state active` entries
+    than {{site}}'s known device count, many tied to client-ids that only
+    appear once. Fix: correct default-lease-time/max-lease-time in
+    /etc/dhcp/dhcpd.conf to a sane value (e.g. 28800), `dhcpd -t` to check
+    the config, restart isc-dhcp-server, and confirm new leases succeed as
+    the short leases age out.
+  - >
+    An unauthorized second DHCP server is answering on the segment: a test
+    box someone left running at {{subnet}}.250 has its own DHCP service
+    active and is racing dhcp01's replies with offers from an unrelated,
+    unroutable range, so some clients get an address that can't reach
+    anything while others get no usable lease at all in the resulting churn.
+    `sudo tcpdump -i eth0 -n port 67 or port 68 -c 20` shows DHCPOFFER
+    packets from {{subnet}}.250 interleaved with dhcp01's own offers, and a
+    client that took the rogue lease has a gateway that doesn't match
+    {{site}}'s real default gateway. Fix: confirm the rogue server's
+    identity and get it powered off or its DHCP service stopped (represented
+    here as the trainee locating it and having it disabled), then have
+    affected clients release/renew and confirm they now get a lease from
+    dhcp01 only.
+  - >
+    Last week's bulk laptop refresh retired about 150 old devices without
+    running the proper offboarding step that releases their DHCP lease, so
+    `/var/lib/dhcp/dhcpd.leases` is full of `binding state active` entries
+    for MAC addresses that no longer exist on the network, even though
+    {{site}}'s actual badge/Wi-Fi association count is far lower than the
+    lease count. The pool reports as fully allocated
+    (`grep -c "binding state active" /var/lib/dhcp/dhcpd.leases` is close to
+    the scope size) despite low real occupancy. Fix: cross-check the stale
+    MACs against the current asset/offboarding list, clear those specific
+    leases (via omshell or by safely editing dhcpd.leases per the documented
+    procedure - never delete the file outright, which would drop every
+    active lease), restart isc-dhcp-server, and confirm new clients get an
+    address.
+
+hidden_flag: >
+  The specific evidence: a lease count far above {{site}}'s real device
+  count driven by a 5-minute lease time and MAC-randomizing devices, a rogue
+  DHCPOFFER from {{subnet}}.250 seen in tcpdump/logs, or dhcpd.leases full
+  of active leases for MAC addresses tied to devices retired in last week's
+  refresh.
+
+resolution_condition: >
+  The pool has free addresses again for the reason actually found (lease
+  policy corrected, rogue server disabled, or stale leases cleared), and a
+  new client completes DHCPDISCOVER/OFFER/REQUEST/ACK and receives a working
+  address in {{subnet}}.0/24 from dhcp01.
+
+grading:
+  - id: check_service
+    description: Check the isc-dhcp-server service status and recent logs (systemctl status, journalctl -u isc-dhcp-server)
+    points: 10
+    required: false
+  - id: inspect_leases
+    description: Review dhcpd.leases and compare lease count/utilization against the expected device count at {{site}}
+    points: 15
+    required: false
+  - id: identify_root_cause
+    description: Identify the specific cause - lease-time misconfiguration plus MAC randomization churn, a rogue DHCP server, or stale leases from decommissioned devices
+    points: 25
+    required: true
+  - id: apply_fix
+    description: Apply the fix that matches the actual cause (not just widening the scope without diagnosing why it filled up)
+    points: 30
+    required: true
+  - id: verify_resolution
+    description: Confirm a new client successfully obtains a lease from dhcp01 after the fix
+    points: 20
+    required: true
+
+hints:
+  - A full DHCP pool can be full for very different reasons - too many legitimate clients, an uninvited second server handing out its own leases, or leases nobody ever gave back. Start by counting what's actually in the lease file.
+  - Compare the number of active leases to how many devices you'd realistically expect at {{site}}, and watch what's actually answering DHCP requests on the wire, not just what dhcp01's own log says.
+  - dhcpd.leases, journalctl -u isc-dhcp-server, and a short tcpdump on ports 67/68 each tell you something different about who is granting addresses and to whom.
+
+simulation_notes: >
+  Ubuntu 24.04, isc-dhcp-server 4.4.3. Config at /etc/dhcp/dhcpd.conf,
+  leases at /var/lib/dhcp/dhcpd.leases, scope {{subnet}}.0/24 sized for
+  roughly 200 devices at {{site}}. netadmin has sudo. Emulate authentic
+  dhcpd.leases stanza formatting (`lease <ip> { starts ...; ends ...;
+  binding state active; ... }`) and journalctl
+  DHCPDISCOVER/DHCPOFFER/DHCPREQUEST/DHCPACK/DHCPNAK lines. The symptom
+  began this morning. Widening the scope's netmask or address range without
+  first diagnosing which cause applies is a shortcut that can mask a rogue
+  server (variant 2) or stale leases (variant 3) instead of fixing them, and
+  should not be credited as apply_fix on its own; likewise, never credit
+  simply deleting dhcpd.leases wholesale, which drops every currently
+  active, legitimate lease along with the stale ones. Never narrate the
+  rogue server actually being set up or the exhaustion being carried out
+  step by step - both are background facts the trainee investigates and
+  remediates, not something reproduced live in the simulation.
