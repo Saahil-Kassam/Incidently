@@ -65,6 +65,11 @@ def test_empty_queue_raises():
         generate(FakeLLM())
 
 
+def test_default_answers_once_the_queue_is_empty():
+    llm = FakeLLM(Reply(stdout="queued"), default=lambda req: Reply(stdout="default"))
+    assert [generate(llm).output.stdout for _ in range(3)] == ["queued", "default", "default"]
+
+
 def test_wrong_schema_is_a_test_bug():
     llm = FakeLLM(Other(value=1))
     with pytest.raises(TypeError, match="scripted a Other but the caller asked for Reply"):

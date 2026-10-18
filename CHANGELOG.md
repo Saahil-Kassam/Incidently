@@ -30,6 +30,17 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Fake LLM (`incidently.fake_llm`): a scripted stand-in used by tests and by
   `INCIDENTLY_FAKE_LLM=1`, so no test calls the real API.
 - Runtime dependencies: `anthropic` and `python-dotenv`.
+- Simulation engine (`incidently.engine`): starts a session with one setup call that writes the
+  ticket and hidden facts, then simulates each command with a snapshot of the session state.
+  Model failures leave the session unchanged and return a short notice instead of raising.
+- Session state (`incidently.session`): hosts, the chain of remote sessions, per-host user,
+  directory and Cisco mode, service changes, established facts, and command history. Replies
+  are checked against the host inventory. Sessions round-trip through JSON.
+- Local command handling (`incidently.shell`): `clear`, `history`, `exit`, Cisco configuration
+  mode `end`/`exit`, and refusal of interactive programs, all without an API call; shell
+  prompts for bash, PowerShell, and Cisco IOS.
+- Offline play: `INCIDENTLY_FAKE_LLM=1` now runs a full session with placeholder output
+  (`incidently.offline`), and `FakeLLM` takes a `default` reply for unscripted requests.
 
 ### Changed
 - CI uses `actions/checkout@v7` and `actions/setup-python@v7`, which run on Node.js 24 instead of the deprecated Node.js 20.

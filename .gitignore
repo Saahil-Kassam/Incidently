@@ -18,3 +18,5 @@ errors_ss/
 
 # Local-only Claude workflow notes (not part of the app)
 docs/agent-teams-*.md
+build/
+dist/

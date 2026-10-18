@@ -53,6 +53,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 - **Local command handling**: `clear`, `history`, `exit`, and blocking interactive tools (`vim`, `top`…) without an API call.
 - **Orchestrator**: command → prompt with state snapshot → `CommandResult` → apply state updates. UI-agnostic; returns data, never prints.
 - **Environment bootstrap**: generate the incident ticket and starting state when a session begins.
+- *As built:* split into `session.py` (state), `shell.py` (local commands and prompts), `prompts.py`, `replies.py` (reply schemas), and `engine.py`. There are no `:meta` commands; the web UI will have buttons for ticket, hint, and submit. Sessions are Pydantic models, ready for SQLite in Milestone 7. `INCIDENTLY_FAKE_LLM=1` plays a full session offline with placeholder output (`offline.py`).
 
 ### Milestone 4 — Grading, hints & debrief
 - **Final assessment**: one grading call over the full command log decides which criteria were met.

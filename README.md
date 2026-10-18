@@ -41,6 +41,12 @@ src/incidently/             application package
   config.py                 settings from environment variables / .env
   llm.py                    the only code that calls the Anthropic API
   fake_llm.py               scripted stand-in model for tests and offline use
+  offline.py                placeholder replies for offline play
+  replies.py                reply shapes the model must produce (ticket, command output)
+  session.py                state of one playthrough: hosts, history, facts
+  shell.py                  built-ins handled locally; shell prompts
+  prompts.py                prompt text for setup and simulation calls
+  engine.py                 runs a playthrough: setup, then one call per command
   scenarios/*.yaml          bundled incident scenarios
 tests/                      pytest suite (never calls the real API)
 docs/                       roadmap and design notes
@@ -73,9 +79,29 @@ Settings are environment variables, read from a local `.env` file if present.
 | `INCIDENTLY_MODEL` | `claude-opus-5-5` | Model for every call |
 | `INCIDENTLY_TURN_EFFORT` | `low` | Effort per simulated command; favours speed |
 | `INCIDENTLY_DEEP_EFFORT` | `high` | Effort for setup and grading; favours quality |
-| `INCIDENTLY_FAKE_LLM` | `0` | `1` uses a scripted fake model and never calls the API |
+| `INCIDENTLY_FAKE_LLM` | `0` | `1` plays offline with placeholder output and never calls the API |
 | `INCIDENTLY_API_MAX_RETRIES` | `4` | Retries for rate limits, 5xx errors, and network drops |
 | `INCIDENTLY_API_TIMEOUT` | `120` | Seconds per API request |
+
+### How a playthrough runs
+
+1. **Setup.** One call at `INCIDENTLY_DEEP_EFFORT` turns the randomised scenario
+   into a service-desk ticket and a list of hidden facts (log lines, versions,
+   addresses) that keep the simulation consistent.
+2. **Commands.** Each command goes to the model with a snapshot of the session
+   state: the active host, the chain of remote sessions, each host's user,
+   directory and Cisco mode, service changes, and every fact established so
+   far. The reply is the output plus state changes, which the engine applies
+   and checks against the host inventory. The model sees the last 40 commands;
+   older ones are dropped in chunks, and the facts list carries continuity.
+3. **Handled locally, with no API call:** `clear`, `history`, `exit` (leaves a
+   remote session; on the first host it asks to end the incident), Cisco
+   `end`/`exit` in configuration mode, and interactive programs such as `vim`,
+   `less`, `top` and `tail -f`, which are refused with a non-interactive
+   alternative.
+
+If a command can't be simulated (API down, refusal, bad reply), the player
+sees a short notice and the session is left exactly as it was.
 
 ### How model calls work
 
