@@ -9,7 +9,10 @@ description = "A local hub for practising enterprise networking incident respons
 readme = "README.md"
 requires-python = ">=3.11"
 # Runtime dependencies are added by the milestone that first needs them.
-dependencies = []
+dependencies = [
+    "pydantic>=2.7",
+    "ruamel.yaml>=0.18",  # pure-Python wheel: installs on every Python/OS, unlike PyYAML
+]
 
 [project.optional-dependencies]
 dev = [
@@ -19,6 +22,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+incidently = ["scenarios/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
