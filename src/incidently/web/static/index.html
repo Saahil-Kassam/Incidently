@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Incidently</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="module" src="/static/hub.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Incident<span>ly</span></a>
+    <span class="spacer"></span>
+    <span class="mode-tag"></span>
+  </header>
+  <main class="page">
+    <h1>Pick an incident</h1>
+    <p class="lead">
+      Each incident starts with a service-desk ticket and a terminal on the affected network.
+      Investigate with real commands, fix the root cause, then submit to be graded.
+    </p>
+    <div id="scenarios" class="grid" aria-live="polite"><p class="muted">Loading scenarios…</p></div>
+  </main>
+  <div id="overlay" class="overlay" hidden></div>
+</body>
+</html>

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Incidently: incident</title>
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/xterm/xterm.js"></script>
+  <script src="/static/vendor/xterm/addon-fit.js"></script>
+  <script type="module" src="/static/play.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Incident<span>ly</span></a>
+    <span id="title" class="muted"></span>
+    <span class="spacer"></span>
+    <span class="mode-tag"></span>
+  </header>
+  <div class="play">
+    <aside class="sidebar">
+      <section aria-labelledby="ticket-h">
+        <h3 id="ticket-h">Ticket</h3>
+        <div id="ticket"><p class="muted">Loading…</p></div>
+      </section>
+      <section aria-labelledby="objective-h">
+        <h3 id="objective-h">Objective</h3>
+        <p id="objective" class="small"></p>
+      </section>
+      <section aria-labelledby="hosts-h">
+        <h3 id="hosts-h">Hosts</h3>
+        <ul id="hosts" class="hosts"></ul>
+      </section>
+      <section aria-labelledby="hints-h">
+        <h3 id="hints-h">Hints</h3>
+        <ol id="hints" class="hints small"></ol>
+        <button id="hint-button" type="button">Get a hint (−5 points)</button>
+      </section>
+      <div class="actions">
+        <button id="submit-button" class="primary" type="button">Submit for grading</button>
+        <p class="muted small">Typing <code>exit</code> on the first host also ends the incident.</p>
+      </div>
+    </aside>
+    <div class="terminal-wrap">
+      <div id="terminal" aria-label="Terminal"></div>
+      <div id="status" class="status" hidden></div>
+    </div>
+  </div>
+  <div id="overlay" class="overlay" hidden></div>
+</body>
+</html>
