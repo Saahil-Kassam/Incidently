@@ -20,7 +20,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .catalog import ScenarioInstance
-from .replies import Bootstrap, CommandResult, Ticket
+from .replies import Assessment, Bootstrap, CommandResult, Ticket
 from .scenario import Host, Scenario, Shell
 
 # Output kept per command. Enough for grading; stops one huge listing from
@@ -28,7 +28,8 @@ from .scenario import Host, Scenario, Shell
 MAX_RECORDED_OUTPUT = 4000
 
 
-def _now() -> str:
+def now_utc() -> str:
+    """The current UTC time as an ISO 8601 string, to the second."""
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
@@ -61,7 +62,7 @@ class CommandRecord(BaseModel):
     stderr: str = ""
     exit_code: int | None = None
     model: str | None = None  # the model that simulated it
-    at: str = Field(default_factory=_now)
+    at: str = Field(default_factory=now_utc)
 
 
 class Session(BaseModel):
@@ -75,12 +76,18 @@ class Session(BaseModel):
     services: dict[str, str] = Field(default_factory=dict)  # "host:service" -> status
     history: list[CommandRecord] = Field(default_factory=list)
     messages: list[dict[str, Any]] = Field(default_factory=list)  # model conversation
-    started_at: str = Field(default_factory=_now)
+    hints_given: list[str] = Field(default_factory=list)  # text of each hint shown, in order
+    started_at: str = Field(default_factory=now_utc)
+    ended_at: str | None = None
+    assessment: Assessment | None = None  # set once the session is graded
 
     @classmethod
-    def create(cls, instance: ScenarioInstance, bootstrap: Bootstrap) -> Session:
+    def create(
+        cls, instance: ScenarioInstance, bootstrap: Bootstrap, *, started_at: str | None = None
+    ) -> Session:
         scenario = instance.scenario
         session = cls(
+            started_at=started_at or now_utc(),
             scenario=scenario,
             root_cause=instance.root_cause,
             seed=instance.seed,
@@ -105,6 +112,15 @@ class Session(BaseModel):
     @property
     def turn(self) -> int:
         return len(self.history)
+
+    @property
+    def ended(self) -> bool:
+        return self.ended_at is not None
+
+    @property
+    def commands_run(self) -> int:
+        """Commands the model simulated (local built-ins don't count)."""
+        return sum(1 for r in self.history if not r.local)
 
     def snapshot(self) -> dict[str, Any]:
         """Compact state sent with every command. Deterministic for a given state."""
@@ -181,6 +197,11 @@ class Session(BaseModel):
         if left.shell == "cisco-ios":
             left.cli_mode = "exec"
         return self.active.name
+
+    def end(self) -> None:
+        """Stop accepting commands. Idempotent: the first end time is kept."""
+        if self.ended_at is None:
+            self.ended_at = now_utc()
 
     def _add_facts(self, facts: list[str]) -> None:
         for fact in facts:

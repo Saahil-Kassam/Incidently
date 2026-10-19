@@ -3,7 +3,8 @@
 They make the whole app usable offline (for UI work, demos, and tests that
 drive a full session), not a real simulation. Every command gets the same
 kind of placeholder output, and ``cd``, ``ssh`` and IOS mode changes update
-the state so the prompt behaves believably.
+the state so the prompt behaves believably. Hints fall back to the
+scenario's own, and grading marks nothing as met.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import shlex
 from pydantic import BaseModel
 
 from .llm import LLMRequest
-from .replies import Bootstrap, CommandResult, StateUpdates, Ticket
+from .replies import Assessment, Bootstrap, CommandResult, HintReply, StateUpdates, Ticket
 
 _COMMAND = re.compile(r"<command [^>]*>(.*)</command>", re.DOTALL)
 _HOST = re.compile(r'<command host="([^"]*)"')
@@ -34,6 +35,10 @@ def offline_reply(request: LLMRequest) -> BaseModel:
         return _bootstrap()
     if request.schema is CommandResult:
         return _command(str(request.messages[-1]["content"]))
+    if request.schema is HintReply:
+        return HintReply(hint="")  # empty: the engine uses the scenario's own hint
+    if request.schema is Assessment:
+        return _assessment()
     raise TypeError(f"offline mode has no reply for {request.schema.__name__}")
 
 
@@ -87,3 +92,18 @@ def _command(content: str) -> CommandResult:
 
 def _result(stdout: str, updates: StateUpdates) -> CommandResult:
     return CommandResult(stdout=stdout, stderr="", exit_code=0, state_updates=updates)
+
+
+def _assessment() -> Assessment:
+    return Assessment(
+        criteria=[],
+        key_evidence_turn=0,
+        resolved=False,
+        resolved_turn=0,
+        risk_events=[],
+        summary="Offline mode: this session was not graded.",
+        root_cause_explanation="Grading needs the model; set INCIDENTLY_FAKE_LLM=0 to be graded.",
+        strengths=[],
+        improvements=[],
+        ideal_path=[],
+    )

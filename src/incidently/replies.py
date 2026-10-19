@@ -82,3 +82,45 @@ class CommandResult(_Reply):
     stderr: str
     exit_code: int = Field(ge=0, le=255)
     state_updates: StateUpdates
+
+
+class HintReply(_Reply):
+    """A hint written for where the player actually is."""
+
+    hint: str = Field(description="1-3 sentences addressed to the player as 'you', plain text")
+
+
+class CriterionAssessment(_Reply):
+    id: str = Field(description="The grading criterion's id")
+    met: bool
+    turn: int = Field(description="Number (#) of the command that first met it, or 0 if unmet")
+    feedback: str = Field(description="One specific sentence to the player about this criterion")
+
+
+class RiskEvent(_Reply):
+    turn: int = Field(description="Number (#) of the risky command")
+    level: Literal["high", "destructive"]
+    reason: str = Field(description="One sentence on why it was risky")
+
+
+class Assessment(_Reply):
+    """The grading call's verdict on the whole command log, plus the debrief text."""
+
+    criteria: list[CriterionAssessment] = Field(
+        description="One entry per grading criterion, in the order given"
+    )
+    key_evidence_turn: int = Field(
+        description="Number (#) of the command whose output first revealed the key evidence, or 0"
+    )
+    resolved: bool = Field(description="Whether the resolution condition held at the end")
+    resolved_turn: int = Field(description="Number (#) of the command that completed the fix, or 0")
+    risk_events: list[RiskEvent]
+    summary: str = Field(description="2-4 candid sentences on how the incident went")
+    root_cause_explanation: str = Field(
+        description="What the root cause was and how its evidence surfaced in this session"
+    )
+    strengths: list[str] = Field(description="Specific things done well, citing commands")
+    improvements: list[str] = Field(description="Specific things to do better, citing commands")
+    ideal_path: list[str] = Field(
+        description="The commands an expert would have run on these hosts, in order"
+    )

@@ -3,7 +3,7 @@ import pytest
 from incidently import engine as engine_module
 from incidently.catalog import Catalog, instantiate
 from incidently.config import Settings
-from incidently.engine import Engine
+from incidently.engine import Engine, Hint, _reveals_answer
 from incidently.fake_llm import FakeLLM
 from incidently.llm import (
     LLMConfigError,
@@ -12,7 +12,14 @@ from incidently.llm import (
     LLMUnavailableError,
 )
 from incidently.offline import offline_reply
-from incidently.replies import Bootstrap, CommandResult, StateUpdates
+from incidently.replies import (
+    Assessment,
+    Bootstrap,
+    CommandResult,
+    CriterionAssessment,
+    HintReply,
+    StateUpdates,
+)
 
 
 def reply(stdout="", stderr="", exit_code=0, **updates):
@@ -285,3 +292,163 @@ def test_every_bundled_scenario_plays_offline(settings, scenario_id):
     turn = engine.run(session, "whoami")
     assert turn.ok
     assert turn.prompt
+
+
+# --- hints --------------------------------------------------------------------
+
+
+def test_hint_is_written_for_the_players_progress(play):
+    engine, llm, session = play
+    llm.queue(reply("ok\n"), HintReply(hint="  Look at the resolver's forwarders.  "))
+    engine.run(session, "dig example.com")
+
+    hint = engine.hint(session)
+    assert hint == Hint(1, 1, "Look at the resolver's forwarders.", written=True)
+    assert session.hints_given == ["Look at the resolver's forwarders."]
+
+    request = llm.requests[-1]
+    assert request.schema is HintReply
+    assert request.effort == "low"
+    content = request.messages[0]["content"]
+    assert "#1 [netops@jump01 /home/netops] dig example.com" in content
+    assert "This is hint 1 of 1." in content
+
+
+def test_hints_run_out(play):
+    engine, llm, session = play
+    llm.queue(HintReply(hint="First."))
+    assert engine.hint(session) is not None
+    assert engine.hint(session) is None  # the lab scenario has one hint
+    assert len(llm.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [LLMUnavailableError("busy"), HintReply(hint="   ")],
+)
+def test_hint_falls_back_to_the_scenarios_own(play, outcome):
+    engine, llm, session = play
+    llm.queue(outcome)
+    hint = engine.hint(session)
+    assert hint.text == session.scenario.hints[0]
+    assert hint.written is False
+    assert session.hints_given == [session.scenario.hints[0]]
+
+
+def test_hint_quoting_the_root_cause_is_replaced(play):
+    engine, llm, session = play
+    leaked = f"Honestly: {session.root_cause.lower()} Go fix it."
+    llm.queue(HintReply(hint=leaked))
+    assert engine.hint(session).text == session.scenario.hints[0]
+
+
+def test_hint_paraphrasing_is_allowed(play):
+    engine, llm, session = play
+    llm.queue(HintReply(hint="Check where the resolver sends queries it can't answer."))
+    assert engine.hint(session).written
+
+
+def test_long_secret_needs_a_long_quoted_run(session):
+    session.root_cause = (
+        "The forwarder on the resolver points at an upstream that stopped answering"
+    )
+    assert not _reveals_answer("Is the forwarder on the resolver healthy?", session)
+    assert _reveals_answer(
+        "the forwarder on the resolver points at an upstream that stopped", session
+    )
+
+
+def test_empty_hidden_text_never_counts_as_leaked(session):
+    session.root_cause = "..."
+    assert not _reveals_answer("Any hint at all.", session)
+
+
+# --- finishing ------------------------------------------------------------------
+
+
+def graded(**overrides):
+    fields = {
+        "criteria": [
+            CriterionAssessment(id="find_cause", met=True, turn=1, feedback="Found it."),
+            CriterionAssessment(id="verify_fix", met=False, turn=0, feedback="Not verified."),
+        ],
+        "key_evidence_turn": 1,
+        "resolved": True,
+        "resolved_turn": 1,
+        "risk_events": [],
+        "summary": "Solid work.",
+        "root_cause_explanation": "The forwarder was dead.",
+        "strengths": ["Checked the logs first."],
+        "improvements": ["Verify the fix."],
+        "ideal_path": ["dig example.com"],
+    }
+    return Assessment(**(fields | overrides))
+
+
+def test_finish_grades_once_and_returns_the_debrief(play):
+    engine, llm, session = play
+    llm.queue(reply("ok\n"), graded())
+    engine.run(session, "dig example.com")
+
+    d = engine.finish(session)
+    assert session.ended
+    assert d.score.earned == 60
+    assert d.score.passed
+    assert d.summary == "Solid work."
+
+    request = llm.requests[-1]
+    assert request.schema is Assessment
+    assert request.effort == "high"
+    content = request.messages[0]["content"]
+    assert "Grading criteria" in content
+    assert "dig example.com   (exit 0)" in content
+
+    assert engine.finish(session) == d  # no second grading call
+    assert len(llm.requests) == 2
+
+
+def test_failed_grading_can_be_retried(play):
+    engine, llm, session = play
+    llm.queue(LLMUnavailableError("busy"))
+    with pytest.raises(LLMUnavailableError):
+        engine.finish(session)
+    assert session.ended
+    assert session.assessment is None
+
+    llm.queue(graded())
+    assert engine.finish(session).summary == "Solid work."
+
+
+def test_an_ended_session_takes_no_more_commands_or_hints(play):
+    engine, llm, session = play
+    llm.queue(graded())
+    engine.finish(session)
+
+    turn = engine.run(session, "dig example.com")
+    assert not turn.ok
+    assert "ended" in turn.notice
+    assert engine.hint(session) is None
+    assert len(llm.requests) == 1
+
+
+def test_offline_session_can_hint_and_finish(settings, lab_instance):
+    engine = Engine(FakeLLM(default=offline_reply), settings)
+    session = engine.start(lab_instance)
+    engine.run(session, "dig example.com")
+
+    assert engine.hint(session).text == session.scenario.hints[0]
+    d = engine.finish(session)
+    assert d.score.total == 0
+    assert "not graded" in d.summary
+
+
+def test_setup_and_simulation_share_the_session_clock(settings, lab_instance, bootstrap):
+    llm = FakeLLM(bootstrap, reply())
+    engine = Engine(llm, settings)
+    session = engine.start(lab_instance)
+    engine.run(session, "date")
+
+    assert (
+        f"Session start time (UTC): {session.started_at}" in llm.requests[0].messages[0]["content"]
+    )
+    assert f"The session started at {session.started_at} (UTC)" in llm.requests[1].system

@@ -39,6 +39,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Local command handling (`incidently.shell`): `clear`, `history`, `exit`, Cisco configuration
   mode `end`/`exit`, and refusal of interactive programs, all without an API call; shell
   prompts for bash, PowerShell, and Cisco IOS.
+- Grading (`incidently.grading`): one grading call decides which criteria were met and writes
+  the debrief; the score (criterion points, +10 evidence bonus, -5 per hint, -5/-15 per
+  high-risk/destructive command, floored at 0) and pass rule are computed locally. Claims are
+  checked against the command log: a criterion needs a cited, simulated command to count.
+- Hints: `Engine.hint()` has the model write each hint for the player's progress, falling
+  back to the scenario's own hint if the call fails or the hint quotes the hidden answer.
+- `Engine.finish()` ends a session, grades it once, and returns the debrief; failed grading
+  can be retried. Ended sessions accept no more commands or hints.
 - Offline play: `INCIDENTLY_FAKE_LLM=1` now runs a full session with placeholder output
   (`incidently.offline`), and `FakeLLM` takes a `default` reply for unscripted requests.
 

@@ -126,3 +126,31 @@ def test_round_trips_through_json(session):
     restored = Session.model_validate_json(session.model_dump_json())
     assert restored == session
     assert restored.active.name == "core-rtr1"
+
+
+def test_graded_session_round_trips_through_json(session):
+    from incidently.replies import Assessment
+
+    session.hints_given.append("Check the resolver.")
+    session.end()
+    session.assessment = Assessment(
+        criteria=[],
+        key_evidence_turn=0,
+        resolved=False,
+        resolved_turn=0,
+        risk_events=[],
+        summary="s",
+        root_cause_explanation="r",
+        strengths=[],
+        improvements=[],
+        ideal_path=[],
+    )
+    restored = Session.model_validate_json(session.model_dump_json())
+    assert restored == session
+    assert restored.ended
+
+
+def test_end_keeps_the_first_end_time(session):
+    session.ended_at = "2026-01-01T00:00:00+00:00"
+    session.end()
+    assert session.ended_at == "2026-01-01T00:00:00+00:00"
