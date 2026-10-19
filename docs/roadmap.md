@@ -71,6 +71,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 - **Debrief page**: score, criteria met/missed, explanation.
 - **No-leak rule**: API responses only contain allowlisted fields; root cause and rubric never reach the browser.
 - **One-command start**: `python -m incidently` launches the server and opens the browser.
+- *As built:* JSON API plus three static pages served by FastAPI; xterm.js is vendored (verified against the npm registry's SHA-512) instead of loaded from a CDN, so offline mode works without internet. Beyond the no-leak allowlist, the server refuses non-local Host headers and cross-origin POSTs, because a page in another tab could otherwise spend the user's credits. The UI was checked in headless Chrome, typing into the terminal over the DevTools protocol.
 
 ### Milestone 6 — Streaming output (`v0.2.0`)
 - **WebSocket command channel**: stdout appears as Claude generates it instead of after the full reply.

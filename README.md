@@ -7,13 +7,50 @@ Pick an incident from the hub, get a ticket, and troubleshoot simulated hosts
 output for every command and keeps the environment consistent as you change it.
 When you submit, you get a score and a debrief explaining the real root cause.
 
-> **Status:** early development. Nothing is playable yet. See the
-> [roadmap](docs/roadmap.md) for what's planned and in what order.
+> **Status:** v0.1.0, the first playable release: four networking incidents,
+> played in the browser and graded at the end. See the
+> [roadmap](docs/roadmap.md) for what comes next.
 
 ## Requirements
 
 - Python 3.11 or newer (tested on 3.11 through 3.15)
-- An Anthropic API key (needed once the simulator is playable)
+- An Anthropic API key, or offline mode to try the app with placeholder output
+
+## Running Incidently
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+copy .env.example .env    # then set ANTHROPIC_API_KEY in .env (remove the leading #)
+python -m incidently
+```
+
+This starts the app at <http://127.0.0.1:8000> and opens it in your browser.
+`incidently` works too, once the virtual environment is active. Options:
+`--port 8080`, `--no-browser`. Press Ctrl+C in the terminal to stop it.
+
+To look around without an API key or spending credits, run it in offline
+mode, where hosts reply with placeholder output and nothing is graded:
+
+```powershell
+$env:INCIDENTLY_FAKE_LLM = "1"; python -m incidently
+```
+
+### Playing
+
+1. **Pick an incident** on the hub. Setup takes up to a minute while the ticket
+   and the hidden details of the fault are generated.
+2. **Investigate** in the terminal with real commands for each host's shell
+   (bash, PowerShell, or Cisco IOS). `ssh` to other hosts in the inventory;
+   `exit` brings you back. Arrow keys recall history, Ctrl+C clears the line.
+   Editors and pagers aren't available, so use `sed -i`, `tee`, `cat`, `grep`.
+3. **Take hints** from the side panel if you're stuck (−5 points each).
+4. **Submit** when you think it's fixed (or type `exit` on the first host).
+   Grading takes up to a minute; the debrief shows your score, each checkpoint,
+   risky commands, the real root cause, and how an expert would have solved it.
+
+Sessions are kept in memory, so restarting the app ends them.
 
 ## Development setup
 
@@ -48,6 +85,11 @@ src/incidently/             application package
   prompts.py                prompt text for setup and simulation calls
   engine.py                 runs a playthrough: setup, then one call per command
   grading.py                scoring rules and the debrief
+  __main__.py               `python -m incidently`: starts the server
+  web/app.py                FastAPI app: JSON API, pages, request checks
+  web/views.py              the only shapes the browser receives
+  web/static/               hub, play, and debrief pages (HTML + ES modules)
+  web/static/vendor/xterm/  xterm.js 5.5.0 + fit addon, vendored (MIT)
   scenarios/*.yaml          bundled incident scenarios
 tests/                      pytest suite (never calls the real API)
 docs/                       roadmap and design notes
