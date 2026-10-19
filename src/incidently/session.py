@@ -57,6 +57,7 @@ class CommandRecord(BaseModel):
     user: str
     cwd: str
     command: str
+    prompt: str = ""  # the prompt it was typed at, for redrawing the terminal
     local: bool = False  # handled by the engine without a model call
     stdout: str = ""
     stderr: str = ""
@@ -144,8 +145,14 @@ class Session(BaseModel):
         result: CommandResult | None = None,
         *,
         model: str | None = None,
+        prompt: str = "",
+        output: str = "",
     ) -> CommandRecord:
-        """Add a command to the history, as it was typed on the active host."""
+        """Add a command to the history, as it was typed on the active host.
+
+        ``result`` is the model's reply for a simulated command; local
+        built-ins pass what they printed as ``output`` instead.
+        """
         host = self.active
         entry = CommandRecord(
             turn=self.turn + 1,
@@ -153,7 +160,9 @@ class Session(BaseModel):
             user=host.user,
             cwd=host.cwd,
             command=command,
+            prompt=prompt,
             local=result is None,
+            stdout=output[:MAX_RECORDED_OUTPUT],
         )
         if result is not None:
             entry.stdout = result.stdout[:MAX_RECORDED_OUTPUT]

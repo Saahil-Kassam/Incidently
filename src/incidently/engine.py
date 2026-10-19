@@ -103,6 +103,7 @@ class Engine:
         """Handle one line of input and update ``session``."""
         if session.ended:
             return self._turn(session, notice="This incident has ended.", ok=False)
+        shown = self.prompt(session)  # the prompt the line was typed at
         c = classify(line, session.active)
 
         if c.kind is Kind.EMPTY:
@@ -110,26 +111,26 @@ class Engine:
         if c.kind is Kind.BLOCKED:
             return self._turn(session, notice=c.message, ok=False)
         if c.kind is Kind.CLEAR:
-            session.record(c.command)
+            session.record(c.command, prompt=shown)
             return self._turn(session, clear_screen=True)
         if c.kind is Kind.HISTORY:
-            session.record(c.command)
-            listing = "\n".join(f"{r.turn:>5}  {r.command}" for r in session.history)
-            return self._turn(session, stdout=listing + "\n")
+            entry = session.record(c.command, prompt=shown)
+            entry.stdout = "".join(f"{r.turn:>5}  {r.command}\n" for r in session.history)
+            return self._turn(session, stdout=entry.stdout)
         if c.kind is Kind.MODE:
-            session.record(c.command)
+            session.record(c.command, prompt=shown)
             session.active.cli_mode = c.mode
             return self._turn(session)
         if c.kind is Kind.EXIT:
             if not session.remote:
                 return self._turn(session, end_requested=True)
-            session.record(c.command)
-            left = session.active.name
+            closed = f"Connection to {session.active.name} closed.\n"
+            session.record(c.command, prompt=shown, output=closed)
             session.disconnect()
-            return self._turn(session, stdout=f"Connection to {left} closed.\n")
-        return self._simulate(session, c.command)
+            return self._turn(session, stdout=closed)
+        return self._simulate(session, c.command, shown)
 
-    def _simulate(self, session: Session, command: str) -> Turn:
+    def _simulate(self, session: Session, command: str, shown: str) -> Turn:
         message = {"role": "user", "content": prompts.command_message(session, command)}
         try:
             result = self._llm.generate(
@@ -147,7 +148,7 @@ class Engine:
         # Keep only the command in the conversation: the snapshot sent with it
         # is stale after this turn, and the next turn sends a fresh one.
         past = {"role": "user", "content": prompts.command_tag(session, command)}
-        session.record(command, reply, model=result.model)
+        session.record(command, reply, model=result.model, prompt=shown)
         session.apply(reply)
         session.messages += [past, {"role": "assistant", "content": reply.model_dump_json()}]
         _trim(session)
