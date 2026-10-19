@@ -6,7 +6,27 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-19
+
+First playable release.
+
 ### Added
+- Local web app (`python -m incidently`, or the `incidently` command): a scenario hub, a play
+  page with an xterm.js terminal (line editing, history, Ctrl+C/Ctrl+L) beside the ticket,
+  objective, hosts, hints and submit button, and a debrief page with the score breakdown,
+  checkpoints, risky commands, root cause, and an expert command path.
+- JSON API (FastAPI) over the engine: list scenarios, start a session, run a command, take a
+  hint, finish, and fetch the session or debrief. Model failures become clear HTTP errors.
+- No-leak rule: the browser only receives allowlisted fields (`incidently.web.views`); the
+  root cause, key evidence, criteria, facts, and notes stay server-side until the debrief.
+  A test plays a full session and scans every response for them.
+- Local-only protections: requests must use a local host name (DNS rebinding) and
+  cross-origin POSTs are refused, since every command spends the user's API credits. One
+  request at a time per session (HTTP 409 otherwise).
+- xterm.js 5.5.0 and its fit addon vendored with their MIT licences, so the app works offline.
+- Session history keeps the prompt each command was typed at and local output, so the
+  terminal can be redrawn after a page reload.
+- Runtime dependencies: `fastapi` and `uvicorn`.
 - Project skeleton: `src/incidently` package, `pyproject.toml`, pytest and ruff config.
 - GitHub Actions CI running lint and tests on every supported Python version (3.11 through 3.15).
 - Roadmap in `docs/roadmap.md`.

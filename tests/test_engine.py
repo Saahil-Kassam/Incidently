@@ -452,3 +452,22 @@ def test_setup_and_simulation_share_the_session_clock(settings, lab_instance, bo
         f"Session start time (UTC): {session.started_at}" in llm.requests[0].messages[0]["content"]
     )
     assert f"The session started at {session.started_at} (UTC)" in llm.requests[1].system
+
+
+def test_history_keeps_prompts_and_local_output_for_redrawing(play):
+    engine, llm, session = play
+    llm.queue(reply(connect_to_host="core-rtr1"), reply("Gi0/1 up\n"))
+    engine.run(session, "ssh core-rtr1")
+    engine.run(session, "show ip int brief")
+    engine.run(session, "exit")
+    engine.run(session, "history")
+
+    assert [(r.prompt, r.command) for r in session.history] == [
+        ("netops@jump01:~$ ", "ssh core-rtr1"),
+        ("core-rtr1#", "show ip int brief"),
+        ("core-rtr1#", "exit"),
+        ("netops@jump01:~$ ", "history"),
+    ]
+    assert session.history[1].stdout == "Gi0/1 up\n"
+    assert session.history[2].stdout == "Connection to core-rtr1 closed.\n"
+    assert session.history[3].stdout.startswith("    1  ssh core-rtr1\n")
