@@ -440,3 +440,15 @@ def test_offline_session_can_hint_and_finish(settings, lab_instance):
     d = engine.finish(session)
     assert d.score.total == 0
     assert "not graded" in d.summary
+
+
+def test_setup_and_simulation_share_the_session_clock(settings, lab_instance, bootstrap):
+    llm = FakeLLM(bootstrap, reply())
+    engine = Engine(llm, settings)
+    session = engine.start(lab_instance)
+    engine.run(session, "date")
+
+    assert (
+        f"Session start time (UTC): {session.started_at}" in llm.requests[0].messages[0]["content"]
+    )
+    assert f"The session started at {session.started_at} (UTC)" in llm.requests[1].system

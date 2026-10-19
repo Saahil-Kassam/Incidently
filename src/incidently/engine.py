@@ -25,7 +25,7 @@ from .config import Settings
 from .grading import Debrief, debrief
 from .llm import LLMConfigError, LLMError, LLMRefusalError, LLMUnavailableError, StructuredLLM
 from .replies import Assessment, Bootstrap, CommandResult, HintReply
-from .session import Session
+from .session import Session, now_utc
 from .shell import Kind, classify, prompt
 
 log = logging.getLogger(__name__)
@@ -79,19 +79,22 @@ class Engine:
         session to fall back to.
         """
         log.info("starting %s seed=%d", instance.scenario.id, instance.seed)
+        started_at = now_utc()
         result = self._llm.generate(
             system=prompts.BOOTSTRAP_SYSTEM,
             messages=[
                 {
                     "role": "user",
-                    "content": prompts.bootstrap_message(instance.scenario, instance.root_cause),
+                    "content": prompts.bootstrap_message(
+                        instance.scenario, instance.root_cause, started_at
+                    ),
                 }
             ],
             schema=Bootstrap,
             effort=self._settings.deep_effort,
             max_tokens=BOOTSTRAP_MAX_TOKENS,
         )
-        return Session.create(instance, result.output)
+        return Session.create(instance, result.output, started_at=started_at)
 
     def prompt(self, session: Session) -> str:
         return prompt(session.active, remote=session.remote)

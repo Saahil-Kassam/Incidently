@@ -52,12 +52,14 @@ affected users, the error text they saw). Never the root cause or the fix.
 2. facts: 8-15 concrete, internally consistent details the simulation must honour \
 for the rest of the session: exact log lines and error codes the root cause \
 produces, versions, relevant config values, addresses, affected accounts, and \
-timestamps (the incident began within the last few hours). These are hidden from \
-the player and keep evidence consistent from one command to the next."""
+timestamps (the incident began within the few hours before the session start \
+time). These are hidden from the player and keep evidence consistent from one \
+command to the next."""
 
 
-def bootstrap_message(scenario: Scenario, root_cause: str) -> str:
-    return f"<scenario>\n{scenario_brief(scenario, root_cause, include_grading=True)}\n</scenario>"
+def bootstrap_message(scenario: Scenario, root_cause: str, started_at: str) -> str:
+    brief = scenario_brief(scenario, root_cause, include_grading=True)
+    return f"<scenario>\n{brief}\n</scenario>\n\nSession start time (UTC): {started_at}"
 
 
 # --- command simulation -------------------------------------------------------
@@ -124,6 +126,10 @@ no command can print them.
 
 ## Scenario (simulator internals)
 {brief}
+
+## Clock
+The session started at {session.started_at} (UTC). Timestamps in output follow \
+on from then; the established facts say when the incident began.
 
 ## Ticket the player received
 {ticket.id} [{ticket.priority}] from {ticket.reported_by}: {ticket.summary}

@@ -28,7 +28,8 @@ from .scenario import Host, Scenario, Shell
 MAX_RECORDED_OUTPUT = 4000
 
 
-def _now() -> str:
+def now_utc() -> str:
+    """The current UTC time as an ISO 8601 string, to the second."""
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
@@ -61,7 +62,7 @@ class CommandRecord(BaseModel):
     stderr: str = ""
     exit_code: int | None = None
     model: str | None = None  # the model that simulated it
-    at: str = Field(default_factory=_now)
+    at: str = Field(default_factory=now_utc)
 
 
 class Session(BaseModel):
@@ -76,14 +77,17 @@ class Session(BaseModel):
     history: list[CommandRecord] = Field(default_factory=list)
     messages: list[dict[str, Any]] = Field(default_factory=list)  # model conversation
     hints_given: list[str] = Field(default_factory=list)  # text of each hint shown, in order
-    started_at: str = Field(default_factory=_now)
+    started_at: str = Field(default_factory=now_utc)
     ended_at: str | None = None
     assessment: Assessment | None = None  # set once the session is graded
 
     @classmethod
-    def create(cls, instance: ScenarioInstance, bootstrap: Bootstrap) -> Session:
+    def create(
+        cls, instance: ScenarioInstance, bootstrap: Bootstrap, *, started_at: str | None = None
+    ) -> Session:
         scenario = instance.scenario
         session = cls(
+            started_at=started_at or now_utc(),
             scenario=scenario,
             root_cause=instance.root_cause,
             seed=instance.seed,
@@ -197,7 +201,7 @@ class Session(BaseModel):
     def end(self) -> None:
         """Stop accepting commands. Idempotent: the first end time is kept."""
         if self.ended_at is None:
-            self.ended_at = _now()
+            self.ended_at = now_utc()
 
     def _add_facts(self, facts: list[str]) -> None:
         for fact in facts:
