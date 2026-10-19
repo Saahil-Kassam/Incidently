@@ -20,6 +20,7 @@ from incidently.llm import (
     Usage,
     create_llm,
 )
+from incidently.replies import CommandResult
 
 
 class Reply(BaseModel):
@@ -278,8 +279,11 @@ def test_unrelated_type_errors_are_not_hidden():
 # --- factory ----------------------------------------------------------------
 
 
-def test_create_llm_returns_fake_when_configured():
-    assert isinstance(create_llm(Settings(fake_llm=True)), FakeLLM)
+def test_create_llm_returns_offline_fake_when_configured():
+    llm = create_llm(Settings(fake_llm=True))
+    assert isinstance(llm, FakeLLM)
+    # Offline play never runs out of replies.
+    assert generate(llm, schema=CommandResult, messages=[{"role": "user", "content": "x"}])
 
 
 def test_create_llm_returns_real_client_with_sdk_retry_settings(monkeypatch):

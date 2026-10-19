@@ -240,8 +240,9 @@ def create_llm(settings: Settings) -> StructuredLLM:
     """Return the real client, or the fake one when ``INCIDENTLY_FAKE_LLM`` is set."""
     if settings.fake_llm:
         from .fake_llm import FakeLLM
+        from .offline import offline_reply
 
-        return FakeLLM()
+        return FakeLLM(default=offline_reply)
     return AnthropicLLM(settings)
 
 

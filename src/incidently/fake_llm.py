@@ -27,8 +27,14 @@ FAKE_MODEL = "fake-llm"
 
 
 class FakeLLM:
-    def __init__(self, *replies: Reply) -> None:
+    def __init__(
+        self,
+        *replies: Reply,
+        default: Callable[[LLMRequest], BaseModel] | None = None,
+    ) -> None:
+        """``default`` answers any request once the queued replies run out."""
         self._replies: deque[Reply] = deque(replies)
+        self._default = default
         self.requests: list[LLMRequest] = []
 
     def queue(self, *replies: Reply) -> None:
@@ -51,9 +57,12 @@ class FakeLLM:
         request = LLMRequest(system, list(messages), schema, effort, max_tokens)
         self.requests.append(request)
 
-        if not self._replies:
+        if self._replies:
+            reply = self._replies.popleft()
+        elif self._default is not None:
+            reply = self._default
+        else:
             raise LLMResponseError(f"FakeLLM has no scripted reply for {schema.__name__}")
-        reply = self._replies.popleft()
         if isinstance(reply, Exception):
             raise reply
         output = reply if isinstance(reply, BaseModel) else reply(request)
