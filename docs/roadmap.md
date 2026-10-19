@@ -61,6 +61,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 - **Deterministic scoring**: arithmetic done locally (criterion points, evidence bonus, hint and risky/destructive-action penalties, pass rule).
 - **Hints**: progressive hints with a point cost.
 - **Debrief data**: what you found, what you missed, the real root cause, recommended fix.
+- *As built:* hints are written by the model for the player's progress and fall back to the scenario's fixed hint if the call fails or quotes the hidden answer (8+ consecutive words of the root cause or key evidence). A criterion only counts if the model cites the simulated command that met it. Grading happens once per session and is stored on it, so a debrief can be rebuilt later without another call.
 
 ### Milestone 5 — Local web app MVP → release `v0.1.0` (first playable)
 - **FastAPI backend**: start session, send command, hint, submit, get debrief. Sessions held in memory.

@@ -7,18 +7,24 @@ app (and tests) drive it directly.
 
 Built-ins like ``clear`` and ``exit`` are answered locally (see
 :mod:`incidently.shell`); every other command is one model call.
+
+:meth:`Engine.hint` writes a hint for where the player is, and
+:meth:`Engine.finish` ends the session, grades it, and returns the
+:class:`incidently.grading.Debrief`.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from . import prompts
 from .catalog import ScenarioInstance
 from .config import Settings
+from .grading import Debrief, debrief
 from .llm import LLMConfigError, LLMError, LLMRefusalError, LLMUnavailableError, StructuredLLM
-from .replies import Bootstrap, CommandResult
+from .replies import Assessment, Bootstrap, CommandResult, HintReply
 from .session import Session
 from .shell import Kind, classify, prompt
 
@@ -26,6 +32,10 @@ log = logging.getLogger(__name__)
 
 BOOTSTRAP_MAX_TOKENS = 16_000
 COMMAND_MAX_TOKENS = 8_000
+HINT_MAX_TOKENS = 8_000
+# A hint repeating this many consecutive words of the hidden answer is a leak.
+LEAK_WORDS = 8
+ASSESSMENT_MAX_TOKENS = 32_000
 
 # The model sees at most this many recent command exchanges. Older ones are
 # dropped in chunks, not one at a time, so the conversation prefix stays stable
@@ -47,6 +57,14 @@ class Turn:
     end_requested: bool = False  # `exit` on the first host: the UI should confirm ending
     notice: str = ""  # a message from the simulator itself, not the host
     ok: bool = True  # False when the command could not be run (it was not recorded)
+
+
+@dataclass(frozen=True)
+class Hint:
+    number: int
+    total: int
+    text: str
+    written: bool  # True if the model wrote it for this moment, False for the scenario's own
 
 
 class Engine:
@@ -80,6 +98,8 @@ class Engine:
 
     def run(self, session: Session, line: str) -> Turn:
         """Handle one line of input and update ``session``."""
+        if session.ended:
+            return self._turn(session, notice="This incident has ended.", ok=False)
         c = classify(line, session.active)
 
         if c.kind is Kind.EMPTY:
@@ -132,6 +152,62 @@ class Engine:
             session, stdout=reply.stdout, stderr=reply.stderr, exit_code=reply.exit_code
         )
 
+    def hint(self, session: Session) -> Hint | None:
+        """The next hint, or None once the scenario's hints are used up or the session ended.
+
+        The model writes it from the player's progress so far. If that call
+        fails, or the hint quotes the hidden answer, the scenario's own hint
+        for this slot is used instead, so asking for a hint always works.
+        Each hint costs points at grading time.
+        """
+        total = len(session.scenario.hints)
+        number = len(session.hints_given) + 1
+        if session.ended or number > total:
+            return None
+
+        text = ""
+        try:
+            result = self._llm.generate(
+                system=prompts.HINT_SYSTEM,
+                messages=[
+                    {"role": "user", "content": prompts.hint_message(session, number, total)}
+                ],
+                schema=HintReply,
+                effort=self._settings.turn_effort,
+                max_tokens=HINT_MAX_TOKENS,
+            )
+            text = result.output.hint.strip()
+        except LLMError as exc:
+            log.warning("hint not written (%s): %s", type(exc).__name__, exc)
+        if text and _reveals_answer(text, session):
+            log.warning("written hint quoted the hidden answer; using the scenario's hint")
+            text = ""
+
+        written = bool(text)
+        text = text or session.scenario.hints[number - 1]
+        session.hints_given.append(text)
+        return Hint(number, total, text, written)
+
+    def finish(self, session: Session) -> Debrief:
+        """End the session, grade it, and return the debrief.
+
+        Grading happens once; calling this again returns the same debrief
+        without another model call. If the grading call fails the error is
+        raised and the session stays ended but ungraded, so the caller can
+        retry.
+        """
+        session.end()
+        if session.assessment is None:
+            result = self._llm.generate(
+                system=prompts.ASSESSMENT_SYSTEM,
+                messages=[{"role": "user", "content": prompts.assessment_message(session)}],
+                schema=Assessment,
+                effort=self._settings.deep_effort,
+                max_tokens=ASSESSMENT_MAX_TOKENS,
+            )
+            session.assessment = result.output
+        return debrief(session)
+
     def _turn(self, session: Session, **fields: object) -> Turn:
         return Turn(prompt=self.prompt(session), **fields)  # type: ignore[arg-type]
 
@@ -141,6 +217,33 @@ def _trim(session: Session) -> None:
     if turns > HISTORY_TURNS:
         drop = max(TRIM_TURNS, turns - HISTORY_TURNS)
         session.messages = session.messages[drop * 2 :]
+
+
+def _reveals_answer(hint: str, session: Session) -> bool:
+    """Whether a hint quotes a long run of the root cause or key evidence word for word.
+
+    A backstop for the hint prompt's own rule: paraphrase is allowed, copying
+    the hidden text is not.
+    """
+    words = _words(hint)
+    for secret in (session.root_cause, session.scenario.hidden_flag):
+        secret_words = _words(secret)
+        if not secret_words:
+            continue
+        span = min(LEAK_WORDS, len(secret_words))
+        for i in range(len(secret_words) - span + 1):
+            if _contains(words, secret_words[i : i + span]):
+                return True
+    return False
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _contains(words: list[str], run: list[str]) -> bool:
+    n = len(run)
+    return any(words[i : i + n] == run for i in range(len(words) - n + 1))
 
 
 def _failure_notice(exc: LLMError) -> str:

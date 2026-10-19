@@ -20,7 +20,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .catalog import ScenarioInstance
-from .replies import Bootstrap, CommandResult, Ticket
+from .replies import Assessment, Bootstrap, CommandResult, Ticket
 from .scenario import Host, Scenario, Shell
 
 # Output kept per command. Enough for grading; stops one huge listing from
@@ -75,7 +75,10 @@ class Session(BaseModel):
     services: dict[str, str] = Field(default_factory=dict)  # "host:service" -> status
     history: list[CommandRecord] = Field(default_factory=list)
     messages: list[dict[str, Any]] = Field(default_factory=list)  # model conversation
+    hints_given: list[str] = Field(default_factory=list)  # text of each hint shown, in order
     started_at: str = Field(default_factory=_now)
+    ended_at: str | None = None
+    assessment: Assessment | None = None  # set once the session is graded
 
     @classmethod
     def create(cls, instance: ScenarioInstance, bootstrap: Bootstrap) -> Session:
@@ -105,6 +108,15 @@ class Session(BaseModel):
     @property
     def turn(self) -> int:
         return len(self.history)
+
+    @property
+    def ended(self) -> bool:
+        return self.ended_at is not None
+
+    @property
+    def commands_run(self) -> int:
+        """Commands the model simulated (local built-ins don't count)."""
+        return sum(1 for r in self.history if not r.local)
 
     def snapshot(self) -> dict[str, Any]:
         """Compact state sent with every command. Deterministic for a given state."""
@@ -181,6 +193,11 @@ class Session(BaseModel):
         if left.shell == "cisco-ios":
             left.cli_mode = "exec"
         return self.active.name
+
+    def end(self) -> None:
+        """Stop accepting commands. Idempotent: the first end time is kept."""
+        if self.ended_at is None:
+            self.ended_at = _now()
 
     def _add_facts(self, facts: list[str]) -> None:
         for fact in facts:

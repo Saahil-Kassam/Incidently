@@ -47,6 +47,7 @@ src/incidently/             application package
   shell.py                  built-ins handled locally; shell prompts
   prompts.py                prompt text for setup and simulation calls
   engine.py                 runs a playthrough: setup, then one call per command
+  grading.py                scoring rules and the debrief
   scenarios/*.yaml          bundled incident scenarios
 tests/                      pytest suite (never calls the real API)
 docs/                       roadmap and design notes
@@ -102,6 +103,28 @@ Settings are environment variables, read from a local `.env` file if present.
 
 If a command can't be simulated (API down, refusal, bad reply), the player
 sees a short notice and the session is left exactly as it was.
+
+4. **Hints.** Each scenario has a fixed number of hints. The model writes each
+   one for where the player actually is, from the command log and the hints
+   already given. If that call fails, or the hint quotes the hidden answer
+   word for word, the scenario's own hint is shown instead.
+5. **Grading.** Submitting ends the session and makes one call at
+   `INCIDENTLY_DEEP_EFFORT` over the whole command log. The model decides which
+   criteria were met (citing the command that met each), whether the incident
+   was resolved, and which commands were risky, and writes the debrief. The
+   score itself is calculated locally:
+
+   | | Points |
+   |---|---|
+   | Each criterion met | its points (each scenario totals 100) |
+   | Key evidence uncovered | +10 |
+   | Each hint used | -5 |
+   | Each high-risk command | -5 |
+   | Each destructive command | -15 |
+
+   The score never goes below 0. **Passing** needs the incident resolved and
+   every required criterion met; otherwise the grade is at best a D. Criteria
+   the model claims without citing a real simulated command don't count.
 
 ### How model calls work
 
