@@ -121,9 +121,12 @@ class Engine:
             return self._turn(session, notice=_failure_notice(exc), ok=False)
 
         reply = result.output
+        # Keep only the command in the conversation: the snapshot sent with it
+        # is stale after this turn, and the next turn sends a fresh one.
+        past = {"role": "user", "content": prompts.command_tag(session, command)}
         session.record(command, reply, model=result.model)
         session.apply(reply)
-        session.messages += [message, {"role": "assistant", "content": reply.model_dump_json()}]
+        session.messages += [past, {"role": "assistant", "content": reply.model_dump_json()}]
         _trim(session)
         return self._turn(
             session, stdout=reply.stdout, stderr=reply.stderr, exit_code=reply.exit_code

@@ -81,6 +81,9 @@ and shell: real formats, column alignment, PowerShell tables and error records, 
 Cisco IOS output, systemd and syslog formats, timestamps near the incident time. \
 Plain text only: no markdown, no ANSI escapes, no commentary. Leave a stream "" \
 when the program prints nothing to it, as successful config changes often do.
+- Never print the shell prompt (user@host:~$, PS C:\\>, router#, router(config)#) \
+before or after the output, not even after logging in to a host or changing mode. \
+The simulator draws the prompt itself.
 - Wrong syntax, the wrong platform, missing privileges, typos, and missing paths \
 fail with the real error message and exit code.
 - Keep long listings realistic but bounded (about 60 lines), truncated the way \
@@ -127,11 +130,16 @@ no command can print them.
 {ticket.description}"""
 
 
-def command_message(session: Session, command: str) -> str:
+def command_tag(session: Session, command: str) -> str:
+    """The command and where it was typed. Earlier turns keep only this in the conversation."""
     host = session.active
-    state = json.dumps(session.snapshot(), sort_keys=True, separators=(",", ":"))
     return (
-        f"<session_state>{state}</session_state>\n"
         f'<command host="{host.name}" shell="{host.shell}" user="{host.user}" '
         f'cwd="{host.cwd}" cli_mode="{host.cli_mode}">{command}</command>'
     )
+
+
+def command_message(session: Session, command: str) -> str:
+    """The current state plus the command. Only the newest turn carries the state."""
+    state = json.dumps(session.snapshot(), sort_keys=True, separators=(",", ":"))
+    return f"<session_state>{state}</session_state>\n{command_tag(session, command)}"

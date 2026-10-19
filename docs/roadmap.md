@@ -54,6 +54,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 - **Orchestrator**: command → prompt with state snapshot → `CommandResult` → apply state updates. UI-agnostic; returns data, never prints.
 - **Environment bootstrap**: generate the incident ticket and starting state when a session begins.
 - *As built:* split into `session.py` (state), `shell.py` (local commands and prompts), `prompts.py`, `replies.py` (reply schemas), and `engine.py`. There are no `:meta` commands; the web UI will have buttons for ticket, hint, and submit. Sessions are Pydantic models, ready for SQLite in Milestone 7. `INCIDENTLY_FAKE_LLM=1` plays a full session offline with placeholder output (`offline.py`).
+- *Smoke test (ospf-routing-loop, seed 42, 5 commands):* every call was served by `claude-opus-5-5` with no fallback, so the Milestone 2 fallback came from the bare test prompt, not the real one. Setup takes about 50 s at high effort (about 5k output tokens), so Milestone 5 needs a loading state and may lower setup effort. Commands take 2-9 s. Two fixes came out of it: the model no longer echoes shell prompts, and only the newest message carries the state snapshot (input tokens on the 5th command fell from 18.5k to 8.3k).
 
 ### Milestone 4 — Grading, hints & debrief
 - **Final assessment**: one grading call over the full command log decides which criteria were met.

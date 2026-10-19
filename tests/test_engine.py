@@ -129,6 +129,20 @@ def test_conversation_grows_with_each_command(play):
     assert CommandResult.model_validate_json(session.messages[1]["content"]).stdout == "a\n"
 
 
+def test_only_the_newest_message_carries_the_state(play):
+    engine, llm, session = play
+    llm.queue(reply("a\n", new_facts=["fact one"]), reply("b\n"))
+    engine.run(session, "first")
+    engine.run(session, "second")
+
+    sent = llm.requests[-1].messages
+    assert "<session_state>" not in sent[0]["content"]
+    assert sent[0]["content"].startswith('<command host="jump01"')
+    assert ">first</command>" in sent[0]["content"]
+    assert "<session_state>" in sent[-1]["content"]
+    assert "fact one" in sent[-1]["content"]  # state is current, not as of turn one
+
+
 def test_state_updates_change_the_prompt(play):
     engine, llm, session = play
     llm.queue(reply(connect_to_host="core-rtr1"), reply(cli_mode="config"))
