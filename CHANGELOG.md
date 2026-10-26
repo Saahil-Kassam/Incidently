@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
+Sessions are saved, so incidents survive a restart; the hub shows your progress and history.
+
 ### Added
 - Saved sessions (`incidently.storage`): every session is stored in a local SQLite file after
   each command, hint, and submission, so incidents survive a restart and can be resumed. The
