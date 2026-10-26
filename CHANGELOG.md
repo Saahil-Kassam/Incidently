@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-26
+
+A polished hub: search and filters, a page for each incident, a progress dashboard, and light and dark themes.
+
 ### Added
 - Hub search and filters: search by name, topic, or skill as you type; filter by category
   (when there's more than one), difficulty, and your status. Filters are kept in the URL, and
