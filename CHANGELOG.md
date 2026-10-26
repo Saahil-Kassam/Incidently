@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
+Command output streams into the terminal as the model writes it.
+
 ### Added
 - Streaming output: a simulated command's output appears in the terminal as the model writes
   it, instead of all at once when the reply is complete.
