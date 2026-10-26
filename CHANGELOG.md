@@ -6,6 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- The hub could stay stuck on "Loading incidents…" after upgrading: static files had no
+  `Cache-Control` header, so a browser could reuse an old cached `common.js` with the new
+  `hub.js`, whose imports then failed. Static files are now served with `Cache-Control:
+  no-cache`, so the browser checks each one before reusing it (a cheap 304 when unchanged).
+
 ## [0.4.0] - 2026-10-26
 
 A polished hub: search and filters, a page for each incident, a progress dashboard, and light and dark themes.

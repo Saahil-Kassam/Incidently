@@ -35,6 +35,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
@@ -176,6 +177,21 @@ class _EventStream:
         # Starlette runs this blocking iterator on a worker thread.
         while (event := self._queue.get()) is not None:
             yield event.model_dump_json() + "\n"
+
+
+class _RevalidatedStaticFiles(StaticFiles):
+    """Static files the browser must check with the server before reusing.
+
+    Without a Cache-Control header, browsers guess how long a file stays fresh
+    from its age. After an upgrade that let a new page run with an old cached
+    script, which broke the page. ``no-cache`` still caches, and the ETag makes
+    each check a cheap 304.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def _llm_failure(exc: LLMError) -> HTTPException:
@@ -356,5 +372,5 @@ def create_app(
     def debrief_page(session_id: str) -> Response:
         return page("debrief.html")
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", _RevalidatedStaticFiles(directory=STATIC_DIR), name="static")
     return app
