@@ -1,8 +1,9 @@
 import os
+from pathlib import Path
 
 import pytest
 
-from incidently.config import DEFAULT_MODEL, ConfigError, Settings
+from incidently.config import DEFAULT_MODEL, ConfigError, Settings, default_data_dir
 
 
 def test_defaults():
@@ -78,3 +79,43 @@ def test_settings_are_immutable():
     settings = Settings.from_env({})
     with pytest.raises(ValueError):
         settings.model = "other"
+
+
+# --- where sessions are saved ---------------------------------------------------
+
+
+def test_data_dir_from_environment_expands_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    settings = Settings.from_env({"INCIDENTLY_DATA_DIR": "~/saves"})
+    assert settings.data_dir == tmp_path / "saves"
+    assert settings.database_path == tmp_path / "saves" / "incidently.db"
+
+
+def test_offline_mode_has_its_own_database(tmp_path):
+    real = Settings(data_dir=tmp_path)
+    offline = Settings(data_dir=tmp_path, fake_llm=True)
+    assert real.database_path == tmp_path / "incidently.db"
+    assert offline.database_path == tmp_path / "incidently-offline.db"
+
+
+def test_database_defaults_to_the_platform_data_dir(isolated_data_dir):
+    assert Settings().database_path == isolated_data_dir / "incidently.db"
+
+
+@pytest.mark.parametrize(
+    ("platform", "env", "expected"),
+    [
+        ("win32", {"LOCALAPPDATA": "/local"}, "/local/Incidently"),
+        ("darwin", {}, "~/Library/Application Support/Incidently"),
+        ("linux", {"XDG_DATA_HOME": "/xdg"}, "/xdg/incidently"),
+        ("linux", {}, "~/.local/share/incidently"),
+    ],
+)
+def test_default_data_dir_per_platform(monkeypatch, platform, env, expected):
+    monkeypatch.setattr("sys.platform", platform)
+    for var in ("LOCALAPPDATA", "XDG_DATA_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    for var, value in env.items():
+        monkeypatch.setenv(var, value)
+    assert default_data_dir() == Path(expected).expanduser()
