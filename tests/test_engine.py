@@ -193,6 +193,51 @@ def test_old_turns_are_trimmed_in_chunks(play, monkeypatch):
     assert len(session.history) == 8  # the full history is kept for grading
 
 
+# --- streamed output ----------------------------------------------------------
+
+
+class Output:
+    def __init__(self):
+        self.pieces = []
+
+    def write(self, text):
+        self.pieces.append(text)
+
+    def restart(self):
+        self.pieces.append(None)
+
+
+def test_output_streams_only_the_commands_stdout(play):
+    engine, llm, session = play
+    llm.queue(reply("eth0: 10.0.0.10/24\nlo: 127.0.0.1/8\n", new_facts=["SECRET-FACT"]))
+    output = Output()
+
+    turn = engine.run(session, "ip -br addr", output=output)
+
+    assert len(output.pieces) > 1
+    assert "".join(output.pieces) == turn.stdout
+    assert "SECRET-FACT" in session.facts
+
+
+def test_failed_command_streams_nothing(play):
+    engine, llm, session = play
+    llm.queue(LLMUnavailableError("down"))
+    output = Output()
+
+    turn = engine.run(session, "ip route", output=output)
+
+    assert not turn.ok
+    assert output.pieces == []
+
+
+def test_local_commands_stream_nothing(play):
+    engine, _, session = play
+    output = Output()
+    turn = engine.run(session, "history", output=output)
+    assert turn.stdout
+    assert output.pieces == []
+
+
 # --- local commands ---------------------------------------------------------
 
 

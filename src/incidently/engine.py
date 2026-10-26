@@ -3,7 +3,10 @@
 The engine is UI-agnostic. :meth:`Engine.start` returns a :class:`Session`;
 :meth:`Engine.run` takes one line the player typed and returns a :class:`Turn`
 describing what to show. Nothing here prints or knows about HTTP, so the web
-app (and tests) drive it directly.
+app (and tests) drive it directly. To show a command's output while it is
+still being written, pass ``output``: it receives the decoded stdout as it
+arrives (see :mod:`incidently.streaming`), and the final :class:`Turn` still
+carries all of it.
 
 Built-ins like ``clear`` and ``exit`` are answered locally (see
 :mod:`incidently.shell`); every other command is one model call.
@@ -23,10 +26,18 @@ from . import prompts
 from .catalog import ScenarioInstance
 from .config import Settings
 from .grading import Debrief, debrief
-from .llm import LLMConfigError, LLMError, LLMRefusalError, LLMUnavailableError, StructuredLLM
+from .llm import (
+    LLMConfigError,
+    LLMError,
+    LLMRefusalError,
+    LLMUnavailableError,
+    StructuredLLM,
+    TextListener,
+)
 from .replies import Assessment, Bootstrap, CommandResult, HintReply
 from .session import Session, now_utc
 from .shell import Kind, classify, prompt
+from .streaming import StdoutRelay
 
 log = logging.getLogger(__name__)
 
@@ -99,8 +110,14 @@ class Engine:
     def prompt(self, session: Session) -> str:
         return prompt(session.active, remote=session.remote)
 
-    def run(self, session: Session, line: str) -> Turn:
-        """Handle one line of input and update ``session``."""
+    def run(self, session: Session, line: str, output: TextListener | None = None) -> Turn:
+        """Handle one line of input and update ``session``.
+
+        ``output`` only hears from simulated commands; local ones (``clear``,
+        ``history``, ...) are answered at once in the returned turn. If it was
+        told to ``restart`` or the turn is not ``ok``, what it was sent is void
+        and the turn is the only record of the command.
+        """
         if session.ended:
             return self._turn(session, notice="This incident has ended.", ok=False)
         shown = self.prompt(session)  # the prompt the line was typed at
@@ -128,9 +145,11 @@ class Engine:
             session.record(c.command, prompt=shown, output=closed)
             session.disconnect()
             return self._turn(session, stdout=closed)
-        return self._simulate(session, c.command, shown)
+        return self._simulate(session, c.command, shown, output)
 
-    def _simulate(self, session: Session, command: str, shown: str) -> Turn:
+    def _simulate(
+        self, session: Session, command: str, shown: str, output: TextListener | None
+    ) -> Turn:
         message = {"role": "user", "content": prompts.command_message(session, command)}
         try:
             result = self._llm.generate(
@@ -139,6 +158,7 @@ class Engine:
                 schema=CommandResult,
                 effort=self._settings.turn_effort,
                 max_tokens=COMMAND_MAX_TOKENS,
+                listener=StdoutRelay(output) if output is not None else None,
             )
         except LLMError as exc:
             log.warning("command not simulated (%s): %s", type(exc).__name__, exc)
