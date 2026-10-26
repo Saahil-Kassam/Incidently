@@ -4,6 +4,12 @@ category: Networking
 topic: DHCP
 difficulty: beginner
 summary: New and reconnecting laptops sit at "obtaining IP address" and never join the network - the DHCP pool looks exhausted.
+description: >
+  The service desk is fielding calls from people whose laptops won't get on
+  the network, while devices already connected seem fine. You have a shell on
+  the site's Linux DHCP server. Work out why the address pool ran dry, fix the
+  real cause rather than the symptom, and prove new clients can lease again.
+skills: [DHCP, Service triage, Log analysis, Configuration review]
 
 randomize:
   site: [HQ, Riverside, Building-C, Campus-North]

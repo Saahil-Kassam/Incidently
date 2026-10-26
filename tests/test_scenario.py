@@ -14,6 +14,16 @@ def test_valid_scenario_loads(scenario_data):
     assert set(scenario.placeholders()) == {"site", "octet"}
 
 
+def test_description_and_skills_are_optional(scenario_data):
+    # Sessions saved before these fields existed embed scenarios without them.
+    scenario = Scenario.model_validate(scenario_data)
+    assert scenario.description == "" and scenario.skills == []
+
+    scenario_data.update(description="A resolver outage.", skills=["DNS", "Log analysis"])
+    scenario = Scenario.model_validate(scenario_data)
+    assert scenario.skills == ["DNS", "Log analysis"]
+
+
 def test_trailing_whitespace_from_folded_yaml_is_stripped(scenario_data):
     scenario_data["objective"] = "Restore name resolution at {{site}}.\n"
     assert Scenario.model_validate(scenario_data).objective.endswith(".")
@@ -48,6 +58,13 @@ def test_numeric_randomize_values_become_strings(scenario_data):
         (lambda d: d["randomize"].update(unused=["x"]), "never used in the scenario: ['unused']"),
         (lambda d: d["randomize"].pop("octet"), "used but not declared in randomize: ['octet']"),
         (lambda d: d["randomize"].update({"bad-key": ["x"]}), "not a valid placeholder name"),
+        (lambda d: d.update(skills=["DNS", "DNS"]), "skills must be unique"),
+        (lambda d: d.update(skills=[" "]), "skills must not be blank"),
+        (
+            lambda d: d.update(description="Users at {{site}} are down."),
+            "description must not use placeholders",
+        ),
+        (lambda d: d.update(skills=["DNS at {{site}}"]), "skills must not use placeholders"),
     ],
 )
 def test_invalid_scenarios_are_rejected(scenario_data, mutate, message):

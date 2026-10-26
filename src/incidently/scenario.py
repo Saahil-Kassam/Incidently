@@ -55,6 +55,16 @@ class Scenario(_Strict):
     topic: str = Field(min_length=1, description="Subject within the category, e.g. 'DHCP'")
     difficulty: Difficulty
     summary: str = Field(min_length=1, description="One-line teaser shown in the hub")
+    description: str = Field(
+        default="",
+        description="A few sentences for the scenario's page: the situation and what it "
+        "practises, never the cause. No placeholders.",
+    )
+    skills: list[str] = Field(
+        default_factory=list,
+        description="Skills it practises, from a vocabulary shared across scenarios so progress "
+        "can be grouped by skill. No placeholders.",
+    )
     randomize: dict[str, list[str]] = Field(
         default_factory=dict,
         description="Placeholder name -> possible values; one is picked per session",
@@ -92,6 +102,16 @@ class Scenario(_Strict):
         _require_unique([c.id for c in self.grading], "grading criterion ids")
         if not any(c.required for c in self.grading):
             raise ValueError("at least one grading criterion must be required")
+
+        _require_unique(self.skills, "skills")
+        if any(not s.strip() for s in self.skills):
+            raise ValueError("skills must not be blank")
+        # Shown before a playthrough is randomised, so there is nothing to fill them in with.
+        shown_unresolved = [("description", self.description)]
+        shown_unresolved += [("skills", s) for s in self.skills]
+        for label, text in shown_unresolved:
+            if PLACEHOLDER.search(text):
+                raise ValueError(f"{label} must not use placeholders: {text!r}")
 
         for key, opts in self.randomize.items():
             if not PLACEHOLDER.fullmatch("{{" + key + "}}"):
