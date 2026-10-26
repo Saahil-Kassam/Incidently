@@ -5,6 +5,9 @@ network access, so tests and offline development never spend API credits.
 Queue the replies a test expects, in order; each one can be a ready-made
 model instance, an exception to raise, or a function that builds the reply
 from the request. Every request is recorded in :attr:`FakeLLM.requests`.
+
+Given a listener, the fake streams the reply's JSON to it in small pieces,
+the way the real model does, so streaming code paths run offline too.
 """
 
 from __future__ import annotations
@@ -17,13 +20,22 @@ from anthropic.types.beta import BetaMessageParam
 from pydantic import BaseModel
 
 from .config import Effort
-from .llm import DEFAULT_MAX_TOKENS, LLMRequest, LLMResponseError, LLMResult, Usage
+from .llm import (
+    DEFAULT_MAX_TOKENS,
+    LLMRequest,
+    LLMResponseError,
+    LLMResult,
+    TextListener,
+    Usage,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
 Reply: TypeAlias = BaseModel | Exception | Callable[[LLMRequest], BaseModel]
 
 FAKE_MODEL = "fake-llm"
+# Odd-sized, so escape sequences regularly straddle two pieces.
+STREAM_CHUNK = 7
 
 
 class FakeLLM:
@@ -53,6 +65,7 @@ class FakeLLM:
         schema: type[T],
         effort: Effort,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        listener: TextListener | None = None,
     ) -> LLMResult[T]:
         request = LLMRequest(system, list(messages), schema, effort, max_tokens)
         self.requests.append(request)
@@ -71,6 +84,10 @@ class FakeLLM:
                 f"FakeLLM scripted a {type(output).__name__} but the caller asked for "
                 f"{schema.__name__}"
             )
+        if listener is not None:
+            text = output.model_dump_json()
+            for i in range(0, len(text), STREAM_CHUNK):
+                listener.write(text[i : i + STREAM_CHUNK])
         return LLMResult(
             output=output,
             usage=Usage(),

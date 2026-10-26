@@ -6,6 +6,24 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
+Command output streams into the terminal as the model writes it.
+
+### Added
+- Streaming output: a simulated command's output appears in the terminal as the model writes
+  it, instead of all at once when the reply is complete.
+- `POST /api/sessions/{id}/commands/stream`: runs a command and answers with newline-delimited
+  JSON events (`output`, `restart`, then a final `turn` or `error`). The command runs on its
+  own thread, so it finishes and is recorded even if the browser disconnects. The JSON
+  `commands` endpoint is unchanged.
+- Incremental decoding (`incidently.streaming`): `StdoutDecoder` pulls the `stdout` string out
+  of the partial JSON reply, handling escapes and surrogate pairs split across pieces. It stops
+  at the end of `stdout`, so the state changes and new facts are never streamed.
+- `TextListener` in `incidently.llm`: `generate()` takes an optional listener that receives the
+  raw reply text as it arrives and is told to restart on a re-ask or a fallback model taking
+  over. The fake model streams its replies in small pieces too.
+
 ## [0.1.0] - 2026-10-19
 
 First playable release.

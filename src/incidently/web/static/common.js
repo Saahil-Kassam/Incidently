@@ -13,18 +13,49 @@ export async function api(path, { method = "GET", body } = {}) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(body);
   }
-  let response;
+  const response = await send(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw failure(response, data);
+  return data;
+}
+
+// POST, then call onEvent with each event of the newline-delimited JSON reply as it arrives.
+export async function stream(path, body, onEvent) {
+  const response = await send(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw failure(response, await response.json().catch(() => ({})));
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch {
+      throw new ApiError(0, "Lost the connection to Incidently. Is the server still running?");
+    }
+    if (chunk.done) break;
+    buffer += chunk.value;
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) if (line.trim()) onEvent(JSON.parse(line));
+  }
+}
+
+async function send(path, options) {
   try {
-    response = await fetch(path, options);
+    return await fetch(path, options);
   } catch {
     throw new ApiError(0, "Can't reach Incidently. Is the server still running?");
   }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = typeof data.detail === "string" ? data.detail : response.statusText;
-    throw new ApiError(response.status, detail);
-  }
-  return data;
+}
+
+function failure(response, data) {
+  const detail = typeof data.detail === "string" ? data.detail : response.statusText;
+  return new ApiError(response.status, detail);
 }
 
 // Build an element. Children are nodes or strings; strings become text, never HTML.

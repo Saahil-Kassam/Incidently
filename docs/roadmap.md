@@ -76,6 +76,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 ### Milestone 6 — Streaming output (`v0.2.0`)
 - **WebSocket command channel**: stdout appears as Claude generates it instead of after the full reply.
 - **Incremental JSON decoding** of the streamed `stdout` field.
+- *As built:* a streamed HTTP response (newline-delimited JSON read with `fetch`) instead of a WebSocket. A command is one request and one reply, so a two-way channel adds nothing; plain `uvicorn` can't serve WebSockets without an extra dependency; and the existing local-host, same-origin and one-request-per-session checks apply unchanged (browsers don't apply same-origin rules to WebSocket handshakes, so those would need their own checks). The decoder stops at the end of `stdout`, so hidden state never streams. Checked in headless Chrome with a slowed fake model: output filled the terminal line by line over about seven seconds, and a reload redrew it once.
 
 ### Milestone 7 — Persistence & progress (`v0.3.0`)
 - **SQLite storage**: sessions survive a server restart; resume an unfinished incident.

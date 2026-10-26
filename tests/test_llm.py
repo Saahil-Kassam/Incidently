@@ -83,6 +83,17 @@ class _Stream:
     def __exit__(self, *exc):
         return False
 
+    def __iter__(self):
+        # The events the SDK yields for the message's content: text arrives in
+        # small pieces, and a fallback block only as its start event.
+        for block in self._result.content:
+            if block.type == "fallback":
+                yield SimpleNamespace(type="content_block_start", content_block=block)
+            elif block.type == "text":
+                yield SimpleNamespace(type="content_block_start", content_block=block)
+                for i in range(0, len(block.text), 5):
+                    yield SimpleNamespace(type="text", text=block.text[i : i + 5])
+
     def get_final_message(self):
         return self._result
 
@@ -274,6 +285,69 @@ def test_unrelated_type_errors_are_not_hidden():
     llm, _ = make_llm(TypeError("unexpected keyword argument 'fallbacks'"))
     with pytest.raises(TypeError, match="fallbacks"):
         generate(llm)
+
+
+# --- streaming to a listener -------------------------------------------------
+
+
+class Listener:
+    """Records what a listener hears; ``restart`` shows up as a marker."""
+
+    def __init__(self):
+        self.heard = []
+
+    def write(self, text):
+        self.heard.append(text)
+
+    def restart(self):
+        self.heard.append(RESTART)
+
+    def text(self):
+        return "".join(h for h in self.heard if h is not RESTART)
+
+
+RESTART = object()
+
+
+def test_listener_hears_the_reply_as_it_arrives():
+    text = '{"stdout": "up 3 days", "exit_code": 0}'
+    llm, _ = make_llm(message(text))
+    listener = Listener()
+
+    result = generate(llm, listener=listener)
+
+    assert len(listener.heard) > 1
+    assert listener.text() == text
+    assert result.output.stdout == "up 3 days"
+
+
+def test_listener_restarts_when_a_reply_is_re_asked():
+    llm, _ = make_llm(
+        message('{"stdout": "lo', stop_reason="max_tokens"),
+        message('{"stdout": "long", "exit_code": 0}'),
+    )
+    listener = Listener()
+
+    generate(llm, listener=listener)
+
+    restart = listener.heard.index(RESTART)
+    assert "".join(listener.heard[:restart]) == '{"stdout": "lo'
+    assert "".join(listener.heard[restart + 1 :]) == '{"stdout": "long", "exit_code": 0}'
+
+
+def test_listener_restarts_when_a_fallback_model_takes_over():
+    content = [
+        SimpleNamespace(type="text", text='{"stdout": "partial'),
+        SimpleNamespace(type="fallback"),
+        SimpleNamespace(type="text", text='{"stdout": "from fallback", "exit_code": 0}'),
+    ]
+    llm, _ = make_llm(message(content=content))
+    listener = Listener()
+
+    generate(llm, listener=listener)
+
+    restart = listener.heard.index(RESTART)
+    assert "".join(listener.heard[restart + 1 :]) == '{"stdout": "from fallback", "exit_code": 0}'
 
 
 # --- factory ----------------------------------------------------------------

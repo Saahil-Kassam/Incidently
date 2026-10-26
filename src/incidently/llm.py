@@ -13,6 +13,11 @@ Every reply is constrained with structured outputs (a JSON schema built from
 the Pydantic model) and then validated locally. Transient API failures are
 retried by the Anthropic SDK itself; this module adds a second, smaller loop
 that re-asks when a reply is empty, cut off, or fails validation.
+
+A caller that wants the reply while it is still being written passes a
+:class:`TextListener`: it receives the raw reply text as it arrives, and is
+told to start over when that text stops counting (a re-ask, or a fallback
+model taking over).
 """
 
 from __future__ import annotations
@@ -101,6 +106,16 @@ class LLMRequest:
     max_tokens: int = DEFAULT_MAX_TOKENS
 
 
+class TextListener(Protocol):
+    """Receives a reply's raw text while the model writes it."""
+
+    def write(self, text: str) -> None:
+        """The next piece of the reply."""
+
+    def restart(self) -> None:
+        """Everything written so far is void: the reply starts again from the beginning."""
+
+
 class StructuredLLM(Protocol):
     def generate(
         self,
@@ -110,6 +125,7 @@ class StructuredLLM(Protocol):
         schema: type[T],
         effort: Effort,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        listener: TextListener | None = None,
     ) -> LLMResult[T]: ...
 
 
@@ -133,13 +149,18 @@ class AnthropicLLM:
         schema: type[T],
         effort: Effort,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        listener: TextListener | None = None,
     ) -> LLMResult[T]:
         output_format = {"type": "json_schema", "schema": anthropic.transform_schema(schema)}
         usage = Usage()
         problem = "no attempts made"
 
         for attempt in range(1, REPLY_ATTEMPTS + 1):
-            message, request_id = self._call(system, messages, output_format, effort, max_tokens)
+            if listener is not None and attempt > 1:
+                listener.restart()
+            message, request_id = self._call(
+                system, messages, output_format, effort, max_tokens, listener
+            )
             usage += _usage(message)
             fell_back = _fell_back(message)
             log.info(
@@ -190,11 +211,12 @@ class AnthropicLLM:
         output_format: dict[str, Any],
         effort: Effort,
         max_tokens: int,
+        listener: TextListener | None,
     ) -> tuple[Any, str | None]:
         """Return the final message and its request id (read from the stream)."""
         try:
-            # Streaming avoids HTTP timeouts on long replies; we only need the
-            # final message here, so the stream is drained by the SDK helper.
+            # Streaming avoids HTTP timeouts on long replies, and lets a
+            # listener see the text as it is written.
             with self._client.beta.messages.stream(
                 model=self._model,
                 max_tokens=max_tokens,
@@ -203,6 +225,8 @@ class AnthropicLLM:
                 output_config={"effort": effort, "format": output_format},
                 **self._fallback_params(),
             ) as stream:
+                if listener is not None:
+                    _relay(stream, listener)
                 return stream.get_final_message(), stream.request_id
         except TypeError as exc:
             # With no credentials at all, the SDK raises a plain TypeError when it
@@ -244,6 +268,19 @@ def create_llm(settings: Settings) -> StructuredLLM:
 
         return FakeLLM(default=offline_reply)
     return AnthropicLLM(settings)
+
+
+def _relay(stream: Any, listener: TextListener) -> None:
+    """Pass the stream's text to ``listener`` as it arrives.
+
+    A ``fallback`` block means the model writing so far declined and another
+    one starts over, so the listener restarts there (see :func:`_reply_text`).
+    """
+    for event in stream:
+        if event.type == "text":
+            listener.write(event.text)
+        elif event.type == "content_block_start" and event.content_block.type == "fallback":
+            listener.restart()
 
 
 def _usage(message: Any) -> Usage:

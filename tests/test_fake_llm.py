@@ -74,3 +74,21 @@ def test_wrong_schema_is_a_test_bug():
     llm = FakeLLM(Other(value=1))
     with pytest.raises(TypeError, match="scripted a Other but the caller asked for Reply"):
         generate(llm)
+
+
+def test_listener_hears_the_reply_json_in_pieces():
+    pieces = []
+
+    class Listener:
+        def write(self, text):
+            pieces.append(text)
+
+        def restart(self):
+            raise AssertionError("the fake never restarts")
+
+    reply = Reply(stdout="a fairly long line of output")
+    llm = FakeLLM(reply)
+    llm.generate(system="s", messages=[], schema=Reply, effort="low", listener=Listener())
+
+    assert len(pieces) > 1
+    assert "".join(pieces) == reply.model_dump_json()
