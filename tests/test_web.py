@@ -19,7 +19,8 @@ from incidently.replies import (
     HintReply,
     StateUpdates,
 )
-from incidently.web.app import SessionStore, create_app
+from incidently.storage import Database, StorageError
+from incidently.web.app import create_app
 
 LAB = "lab-outage"
 
@@ -67,9 +68,32 @@ def llm(bootstrap):
 
 
 @pytest.fixture
-def client(llm, catalog):
-    app = create_app(Settings(), llm, catalog=catalog, allowed_hosts=["testserver"])
+def database(tmp_path):
+    database = Database(tmp_path / "test.db")
+    yield database
+    database.close()
+
+
+def make_client(llm, catalog, database):
+    app = create_app(
+        Settings(), llm, catalog=catalog, database=database, allowed_hosts=["testserver"]
+    )
     return TestClient(app)
+
+
+@pytest.fixture
+def client(llm, catalog, database):
+    return make_client(llm, catalog, database)
+
+
+@pytest.fixture
+def restart(llm, catalog, database):
+    """A fresh app over the same database file, as after restarting the server."""
+
+    def restarted():
+        return make_client(llm, catalog, Database(database.path))
+
+    return restarted
 
 
 @pytest.fixture
@@ -291,10 +315,10 @@ def test_failed_grading_can_be_retried(client, llm, session_id):
     assert client.post(url(session_id, "finish")).status_code == 200
 
 
-def test_nothing_secret_reaches_the_browser_before_grading(catalog, bootstrap):
+def test_nothing_secret_reaches_the_browser_before_grading(catalog, bootstrap, tmp_path):
     """Play a whole offline session and scan every response, streamed ones too, for hidden text."""
     llm = FakeLLM(bootstrap, default=offline_reply)
-    client = TestClient(create_app(Settings(), llm, catalog=catalog, allowed_hosts=["testserver"]))
+    client = make_client(llm, catalog, Database(tmp_path / "leak.db"))
     scenario = catalog.get(LAB)
 
     responses = [client.get("/api/scenarios"), client.get("/api/health")]
@@ -308,6 +332,7 @@ def test_nothing_secret_reaches_the_browser_before_grading(catalog, bootstrap):
         for line in ("cat /etc/resolv.conf", "ssh dc01", "Get-DnsServerForwarder")
     ]
     responses += [client.post(url(sid, "hint")), client.get(url(sid))]
+    responses += [client.get("/api/history"), client.get("/api/progress")]
 
     text = "\n".join([*(json.dumps(r.json()) for r in responses), *streamed])
     secrets = [
@@ -351,14 +376,125 @@ def test_same_origin_posts_are_allowed(client, llm, session_id):
     assert response.status_code == 200
 
 
-def test_session_store_drops_the_oldest_past_its_limit(session):
-    store = SessionStore(limit=2)
-    first = store.add(session)
-    store.add(session)
-    store.add(session)
-    assert len(store) == 2
-    with pytest.raises(Exception, match="404"):
-        store.get(first)
+# --- saved sessions -------------------------------------------------------------------
+
+
+def test_sessions_survive_a_restart(client, llm, session_id, restart):
+    llm.queue(reply("10.0.0.10\n", connect_to_host="core-rtr1"))
+    stream(client, session_id, "ssh core-rtr1")
+    before = client.get(url(session_id)).json()
+
+    again = restart()
+    assert again.get(url(session_id)).json() == before
+    llm.queue(reply("Router uptime is 3 days\n"))
+    turn = again.post(url(session_id, "commands"), json={"line": "show version"}).json()
+    assert turn["prompt"] == "core-rtr1#"  # still on the host it was left on
+
+
+def test_every_change_is_saved(client, llm, session_id, database):
+    def saved():
+        return database.load(session_id)
+
+    llm.queue(reply("ok\n"))
+    client.post(url(session_id, "commands"), json={"line": "dig example.com"})
+    assert saved().turn == 1
+    stream(client, session_id, "history")
+    assert saved().turn == 2
+    llm.queue(HintReply(hint="Look at the forwarders."))
+    client.post(url(session_id, "hint"))
+    assert saved().hints_given == ["Look at the forwarders."]
+    llm.queue(graded())
+    client.post(url(session_id, "finish"))
+    assert saved().assessment is not None
+
+
+def test_failed_grading_is_saved_as_ended(client, llm, session_id, restart):
+    llm.queue(LLMUnavailableError("down"))
+    assert client.post(url(session_id, "finish")).status_code == 503
+    assert restart().get(url(session_id)).json()["ended"] is True
+
+
+def test_a_graded_debrief_reopens_after_a_restart(client, llm, session_id, restart):
+    llm.queue(reply("ok\n"), graded())
+    client.post(url(session_id, "commands"), json={"line": "dig example.com"})
+    debrief = client.post(url(session_id, "finish")).json()
+    assert restart().get(url(session_id, "debrief")).json() == debrief
+
+
+def test_one_cached_entry_and_lock_per_session(client, session_id, restart):
+    store = restart().app.state.store
+    assert store.get(session_id) is store.get(session_id)
+
+
+def test_storage_failures_are_clear_errors(client, session_id, restart, monkeypatch):
+    again = restart()
+
+    def broken(session_id):
+        raise StorageError("disk on fire")
+
+    monkeypatch.setattr(again.app.state.store.database, "load", broken)
+    response = again.get(url(session_id))
+    assert response.status_code == 500
+    assert "disk on fire" in response.json()["detail"]
+
+
+def test_default_database_is_in_the_data_folder(llm, catalog, isolated_data_dir):
+    app = create_app(Settings(), llm, catalog=catalog, allowed_hosts=["testserver"])
+    TestClient(app).post("/api/sessions", json={"scenario_id": LAB})
+    assert (isolated_data_dir / "incidently.db").exists()
+
+
+# --- history and progress ----------------------------------------------------------------
+
+
+def test_history_lists_attempts_newest_first(client, llm, session_id, bootstrap):
+    llm.queue(reply("ok\n"), graded())
+    client.post(url(session_id, "commands"), json={"line": "dig example.com"})
+    client.post(url(session_id, "finish"))
+    llm.queue(bootstrap)
+    newer = client.post("/api/sessions", json={"scenario_id": LAB}).json()["id"]
+
+    first, second = client.get("/api/history").json()
+    assert first["session_id"] == newer
+    assert first["status"] == "in_progress"
+    assert first["total"] is None and first["duration_seconds"] is None
+    assert second["session_id"] == session_id
+    assert second["status"] == "passed"
+    assert second["title"] == "Test Outage"
+    assert second["commands"] == 1 and second["hints"] == 0
+    assert second["grade"] and second["percent"] > 0
+    assert second["duration_seconds"] >= 0
+
+
+def test_progress_for_an_unplayed_scenario(client):
+    assert client.get("/api/progress").json() == [
+        {
+            "scenario_id": LAB,
+            "status": "not_started",
+            "attempts": 0,
+            "best_percent": None,
+            "best_grade": None,
+            "resume_id": None,
+        }
+    ]
+
+
+def test_progress_offers_to_resume_an_unfinished_attempt(client, session_id):
+    (record,) = client.get("/api/progress").json()
+    assert record["status"] == "in_progress"
+    assert record["resume_id"] == session_id
+
+
+def test_progress_after_passing(client, llm, session_id):
+    llm.queue(reply("ok\n"), graded())
+    client.post(url(session_id, "commands"), json={"line": "dig example.com"})
+    client.post(url(session_id, "finish"))
+
+    (record,) = client.get("/api/progress").json()
+    assert record["status"] == "passed"
+    assert record["attempts"] == 1
+    assert record["best_percent"] > 0 and record["best_grade"]
+    assert record["resume_id"] is None
 
 
 # --- pages ------------------------------------------------------------------------
@@ -388,14 +524,25 @@ def test_health_reports_mode(client):
 # --- command line --------------------------------------------------------------------
 
 
-def test_cli_starts_uvicorn_on_localhost(monkeypatch, capsys, tmp_path):
+def test_cli_starts_uvicorn_on_localhost(monkeypatch, capsys, tmp_path, isolated_data_dir):
     monkeypatch.chdir(tmp_path)  # don't read the developer's real .env
     calls = {}
     monkeypatch.setenv("INCIDENTLY_FAKE_LLM", "1")
     monkeypatch.setattr("uvicorn.run", lambda app, **kw: calls.update(app=app, **kw))
     assert cli.main(["--no-browser", "--port", "8123"]) == 0
     assert calls["host"] == "127.0.0.1" and calls["port"] == 8123
-    assert "http://127.0.0.1:8123/" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "http://127.0.0.1:8123/" in out
+    assert str(isolated_data_dir / "incidently-offline.db") in out
+
+
+def test_cli_reports_an_unusable_data_folder(monkeypatch, capsys, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("INCIDENTLY_FAKE_LLM", "1")
+    (tmp_path / "blocked").write_text("a file, not a folder")
+    monkeypatch.setenv("INCIDENTLY_DATA_DIR", str(tmp_path / "blocked"))
+    assert cli.main(["--no-browser"]) == 2
+    assert "can't open the session database" in capsys.readouterr().err
 
 
 def test_cli_reports_bad_configuration(monkeypatch, capsys, tmp_path):
