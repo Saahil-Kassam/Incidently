@@ -116,6 +116,22 @@ class Progress:
     resume_id: str | None  # the newest attempt not yet graded, to pick up again
 
 
+@dataclass(frozen=True)
+class Summary:
+    """Totals across every attempt, for the progress dashboard."""
+
+    attempts: int
+    graded: int
+    passed: int  # graded attempts that passed
+    seconds_played: int  # summed over submitted attempts
+    average_percent: int | None  # mean score of graded attempts
+
+    @property
+    def pass_rate(self) -> int | None:
+        """Percentage of graded attempts that passed, or None before any were graded."""
+        return round(100 * self.passed / self.graded) if self.graded else None
+
+
 class Database:
     """Sessions by id in one SQLite file. Safe to share between threads."""
 
@@ -222,6 +238,19 @@ def progress(attempts: Iterable[Attempt]) -> dict[str, Progress]:
             status = "attempted"
         result[scenario_id] = Progress(scenario_id, status, len(group), best, resume_id)
     return result
+
+
+def summarize(attempts: Iterable[Attempt]) -> Summary:
+    attempts = list(attempts)
+    graded = [a for a in attempts if a.graded]
+    percents = [a.percent or 0 for a in graded]
+    return Summary(
+        attempts=len(attempts),
+        graded=len(graded),
+        passed=sum(1 for a in graded if a.passed),
+        seconds_played=sum(a.duration_seconds or 0 for a in attempts),
+        average_percent=round(sum(percents) / len(percents)) if percents else None,
+    )
 
 
 def _attempt(row: tuple) -> Attempt:

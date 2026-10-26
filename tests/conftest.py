@@ -42,6 +42,8 @@ LAB_SCENARIO = {
     "id": "lab-outage",
     "randomize": {},
     "summary": "Users can't resolve names.",
+    "description": "Name resolution is failing across the lab. Find out why and fix it.",
+    "skills": ["DNS", "Log analysis"],
     "objective": "Restore name resolution.",
     "resolution_condition": "Names resolve again.",
     "hosts": [

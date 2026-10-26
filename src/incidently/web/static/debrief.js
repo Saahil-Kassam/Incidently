@@ -1,6 +1,6 @@
 // Debrief page: the score, what was found and missed, and how an expert would have done it.
 
-import { api, el, hideOverlay, sessionIdFromPath, showBusy, showError, showMode } from "./common.js";
+import { api, el, hideOverlay, sessionIdFromPath, showBusy, showError, initChrome } from "./common.js";
 
 const sessionId = sessionIdFromPath();
 const root = document.getElementById("debrief");
@@ -117,5 +117,5 @@ async function load() {
   }
 }
 
-showMode();
+initChrome();
 load();

@@ -4,6 +4,13 @@ category: Networking
 topic: DNS
 difficulty: intermediate
 summary: Some employees land on a fake login page instead of the intranet portal - DNS seems to be lying to them.
+description: >
+  A security-flavoured outage: the intranet portal's name sometimes resolves
+  to the wrong address, and users are being shown a lookalike login page. You
+  have a shell on the internal BIND resolver. Reproduce the bad answer, find
+  what is overriding normal resolution, fix it properly, and leave the
+  resolver harder to fool.
+skills: [DNS, Reproducing a fault, Configuration review, Hardening]
 
 randomize:
   domain: [corp.local, fabrikam.internal, northwind.lan, tailspin.corp]

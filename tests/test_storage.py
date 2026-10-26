@@ -7,7 +7,15 @@ from datetime import datetime, timedelta
 import pytest
 
 from incidently.replies import Assessment, CommandResult, CriterionAssessment, StateUpdates
-from incidently.storage import MIGRATIONS, Attempt, Database, StorageError, progress
+from incidently.storage import (
+    MIGRATIONS,
+    Attempt,
+    Database,
+    StorageError,
+    Summary,
+    progress,
+    summarize,
+)
 
 
 def command_reply(stdout="ok\n"):
@@ -258,3 +266,25 @@ def test_progress_resumes_the_newest_unfinished_attempt(db, session):
 
 def test_progress_leaves_out_unplayed_scenarios():
     assert progress([]) == {}
+
+
+# --- totals ---------------------------------------------------------------------------
+
+
+def test_summary_of_nothing():
+    totals = summarize([])
+    assert totals == Summary(attempts=0, graded=0, passed=0, seconds_played=0, average_percent=None)
+    assert totals.pass_rate is None
+
+
+def test_summary_counts_graded_attempts_and_time(db, session):
+    attempts = make_attempts(
+        db,
+        session,
+        [("fail", assessment(met=False)), ("pass", assessment()), ("open", None)],
+    )
+    totals = summarize(attempts)
+    assert (totals.attempts, totals.graded, totals.passed) == (3, 2, 1)
+    assert totals.pass_rate == 50
+    assert totals.seconds_played == 2 * 20 * 60  # the unfinished one has no duration
+    assert totals.average_percent == round((0 + 55) / 2)

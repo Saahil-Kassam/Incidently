@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Incidently: progress</title>
+  <script src="/static/theme.js"></script>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="module" src="/static/progress.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Incident<span>ly</span></a>
+    <nav class="nav" aria-label="Main">
+      <a href="/">Incidents</a>
+      <a href="/progress" aria-current="page">Progress</a>
+    </nav>
+    <span class="spacer"></span>
+    <span class="mode-tag"></span>
+    <button id="theme-toggle" class="theme-toggle" type="button">Theme</button>
+  </header>
+  <main class="page">
+    <h1>Your progress</h1>
+    <p class="lead">How you're doing across every incident, which skills you've proven, and every attempt you've made.</p>
+    <div id="progress" aria-live="polite"><p class="muted">Loading your progress…</p></div>
+  </main>
+  <div id="overlay" class="overlay" hidden></div>
+</body>
+</html>

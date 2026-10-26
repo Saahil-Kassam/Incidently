@@ -4,6 +4,12 @@ category: Networking
 topic: Wireless (802.1X)
 difficulty: beginner
 summary: Nobody can join the CORP-SECURE SSID; laptops keep prompting for credentials.
+description: >
+  Corporate Wi-Fi uses 802.1X, and right now nobody can authenticate. You
+  have a shell on the FreeRADIUS server behind it. Watch an authentication
+  attempt fail, find the evidence that explains why, and check the
+  configuration before you restart anything.
+skills: [802.1X and RADIUS, Service triage, Log analysis, Change control]
 
 randomize:
   site: [HQ, Building-C, Riverside, Campus-North]

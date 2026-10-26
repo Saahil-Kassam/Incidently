@@ -4,6 +4,13 @@ category: Networking
 topic: Routing
 difficulty: advanced
 summary: A branch office lost access to the data center and traceroutes bounce between two core routers.
+description: >
+  A whole branch office has lost the data center, and packets are going round
+  in circles. Starting from a Linux jump host, you'll trace the path, log in
+  to the Cisco IOS core routers, and compare how each one routes the branch.
+  Make a targeted change on the right router, prove the path is clean, and
+  don't forget to save your work.
+skills: [Routing, Cisco IOS, Path tracing, Change control]
 
 randomize:
   branch: ["10.44", "10.61", "10.88"]

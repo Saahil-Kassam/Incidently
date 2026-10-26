@@ -13,6 +13,15 @@ CATALOG = Catalog.load()
 SCENARIOS = list(CATALOG)
 
 
+def test_skills_are_shared_between_scenarios():
+    # A shared vocabulary is what lets progress be grouped by skill.
+    counts = {}
+    for scenario in SCENARIOS:
+        for skill in scenario.skills:
+            counts[skill] = counts.get(skill, 0) + 1
+    assert sum(1 for n in counts.values() if n > 1) >= 3
+
+
 def test_networking_scenarios_are_bundled():
     assert {s.id for s in SCENARIOS} == {
         "dhcp-pool-exhaustion",
@@ -32,6 +41,18 @@ class TestBundledScenario:
 
     def test_root_causes_are_distinct(self, scenario):
         assert len(set(scenario.root_cause_variants)) == len(scenario.root_cause_variants)
+
+    def test_has_a_description_and_skills(self, scenario):
+        assert len(scenario.description) > len(scenario.summary)
+        assert 2 <= len(scenario.skills) <= 5
+
+    def test_description_gives_nothing_away(self, scenario):
+        text = scenario.description.lower()
+        for secret in [*scenario.root_cause_variants, scenario.hidden_flag]:
+            # No run of five words from a root cause or the key evidence.
+            words = secret.lower().split()
+            for i in range(len(words) - 4):
+                assert " ".join(words[i : i + 5]) not in text
 
     def test_resolves_cleanly_across_seeds(self, scenario):
         for seed in range(25):
