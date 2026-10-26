@@ -82,6 +82,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 - **SQLite storage**: sessions survive a server restart; resume an unfinished incident.
 - **Incident history**: past attempts with score, date, duration; reopen any debrief.
 - **Hub progress badges**: not started / in progress / passed, best score per scenario.
+- *As built:* the standard library's `sqlite3`, not SQLAlchemy: there is one table, a session is already a Pydantic model that round-trips through JSON, and the queries are three short statements, so an ORM would only add a dependency. Each row holds the whole session (including its copy of the scenario, so old attempts still open after a scenario file changes) plus summary columns for the history and progress queries. Schema changes go through numbered migrations tracked in `PRAGMA user_version`. Offline mode writes to its own file. A failed grading call still saves the ended session, so it can be retried after a restart. Checked by playing over HTTP, restarting the server, and driving the hub in headless Chrome: badges, history, the resume dialog, and the debrief link all came back from the file.
 
 ### Milestone 8 — Hub polish (`v0.4.0`)
 - **Filter & search**: by category, difficulty, status; text search.
