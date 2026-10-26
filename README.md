@@ -40,8 +40,12 @@ $env:INCIDENTLY_FAKE_LLM = "1"; python -m incidently
 
 ### Playing
 
-1. **Pick an incident** on the hub. Setup takes up to a minute while the ticket
-   and the hidden details of the fault are generated.
+1. **Pick an incident** on the hub. Search by name, topic, or skill, and
+   filter by difficulty or by your status (not started, in progress, passed,
+   not passed yet). Each incident has its own page with a description, the
+   skills it practises, and your attempts; start or resume from there. Setup
+   takes up to a minute while the ticket and the hidden details of the fault
+   are generated.
 2. **Investigate** in the terminal with real commands for each host's shell
    (bash, PowerShell, or Cisco IOS). `ssh` to other hosts in the inventory;
    `exit` brings you back. Arrow keys recall history, Ctrl+C clears the line.
@@ -53,9 +57,19 @@ $env:INCIDENTLY_FAKE_LLM = "1"; python -m incidently
 
 Every session is saved as you play, so you can close the app and pick up
 where you left off: the hub marks each incident *In progress*, *Passed*, or
-*Not passed yet* with your best score, offers to resume an unfinished attempt,
-and lists all your attempts with their date, time taken, and result. Graded
-attempts reopen their debrief. Sessions are saved in a SQLite file in your
+*Not passed yet* with your best score, and an incident's page offers to resume
+an unfinished attempt. **Progress** shows incidents passed, pass rate,
+average score, time spent, which skills you've proven, and every attempt with
+its date, time taken, and result. Graded attempts reopen their debrief.
+
+The app follows your system's light or dark setting; the button in the top
+bar switches between System, Light, and Dark. Press <kbd>?</kbd> for keyboard
+shortcuts: <kbd>/</kbd> searches, <kbd>g</kbd> <kbd>i</kbd> and
+<kbd>g</kbd> <kbd>p</kbd> go to Incidents and Progress, and <kbd>Esc</kbd>
+closes a dialog or clears the search. Reduced motion, reduced transparency,
+and increased contrast settings are respected.
+
+Sessions are saved in a SQLite file in your
 user data folder (`%LOCALAPPDATA%\Incidently` on Windows; see
 `INCIDENTLY_DATA_DIR` below), and offline mode keeps a separate file, so
 placeholder sessions never count towards your progress.
@@ -98,7 +112,7 @@ src/incidently/             application package
   __main__.py               `python -m incidently`: starts the server
   web/app.py                FastAPI app: JSON API, streamed commands, pages, request checks
   web/views.py              the only shapes the browser receives
-  web/static/               hub, play, and debrief pages (HTML + ES modules)
+  web/static/               hub, scenario, progress, play, and debrief pages (HTML + ES modules)
   web/static/vendor/xterm/  xterm.js 5.5.0 + fit addon, vendored (MIT)
   scenarios/*.yaml          bundled incident scenarios
 tests/                      pytest suite (never calls the real API)

@@ -6,6 +6,36 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Hub search and filters: search by name, topic, or skill as you type; filter by category
+  (when there's more than one), difficulty, and your status. Filters are kept in the URL, and
+  an empty result offers to clear them.
+- Scenario page (`/scenarios/<id>`): the description, skills practised, your status, best score
+  and attempts, and Start, Resume, or Start a new attempt.
+- Progress dashboard (`/progress`): incidents passed, pass rate, average score, attempts, time
+  spent, a per-skill breakdown, and every attempt.
+- `description` and `skills` on scenarios (optional, so older saved sessions still load), filled
+  in for all four bundled incidents with a skill vocabulary they share.
+- `GET /api/scenarios/{id}` and `GET /api/stats`; scenario cards now include `skills`.
+- Light and dark themes that follow the system, with a System / Light / Dark switch in the top
+  bar. The choice is applied before the first paint, and changing it eases instead of flashing.
+- Keyboard shortcuts: `/` search, `Esc` close or clear, `g i` Incidents, `g p` Progress, `?` list
+  them. They're off while typing in the terminal or a text box.
+- A favicon.
+
+### Changed
+- Interface polish following Apple's design guidance (the `apple-design` skill): a translucent
+  top bar that content scrolls under, with an edge only once it does; text spacing that tightens
+  as type grows; instant press feedback on buttons and cards; dialogs that grow out of the control
+  that opened them on a critically damped spring and leave the same way, close with `Esc`, keep
+  `Tab` inside, and return focus afterwards.
+- Accessibility: reduced motion turns movement into cross-fades, reduced transparency makes
+  surfaces solid, and increased contrast strengthens borders and text.
+- Responsive layout down to phone width: wrapping filters, single-column cards, and history rows
+  that stack.
+- Clear loading, empty, and error states, with a way to retry, on every page.
+- Hub cards open the scenario page; the attempts list moved from the hub to Progress.
+
 ## [0.3.0] - 2026-10-26
 
 Sessions are saved, so incidents survive a restart; the hub shows your progress and history.
