@@ -1,6 +1,8 @@
 // Play page: the terminal, the ticket panel, hints, and submitting.
 
-import { api, ask, el, hideOverlay, sessionIdFromPath, showBusy, showError, showMode } from "./common.js";
+import {
+  ApiError, api, ask, el, hideOverlay, sessionIdFromPath, showBusy, showError, showMode, stream,
+} from "./common.js";
 
 const sessionId = sessionIdFromPath();
 const CLEAR_WORDS = new Set(["clear", "cls", "clear-host"]);
@@ -119,9 +121,45 @@ function setStatus(text) {
   status.hidden = !text;
 }
 
-function writeOutput({ stdout, stderr }) {
-  if (stdout) term.write(stdout.endsWith("\n") ? stdout : `${stdout}\n`);
-  if (stderr) term.write(style.red(stderr.endsWith("\n") ? stderr : `${stderr}\n`));
+const withNewline = (s) => (s.endsWith("\n") ? s : `${s}\n`);
+
+// End a partly written line, so what comes next starts on a line of its own.
+function breakLine(shown) {
+  if (shown && !shown.endsWith("\n")) term.write("\n");
+}
+
+// Write a command's output. `shown` is the stdout already streamed to the terminal.
+function writeOutput({ stdout, stderr }, shown = "") {
+  if (!stdout.startsWith(shown)) {
+    breakLine(shown);
+    term.write(style.yellow("[incidently] The output changed as it was written. In full:\n"));
+    shown = "";
+  }
+  if (stdout) term.write(withNewline(stdout).slice(shown.length));
+  if (stderr) term.write(style.red(withNewline(stderr)));
+}
+
+let streamed = ""; // stdout of the running command written so far
+
+// Run a command, writing its stdout as the model produces it, and resolve with the final turn.
+async function runCommand(command) {
+  let turn = null;
+  await stream(`/api/sessions/${encodeURIComponent(sessionId)}/commands/stream`, { line: command }, (event) => {
+    if (event.type === "output") {
+      term.write(event.text);
+      streamed += event.text;
+    } else if (event.type === "restart") {
+      breakLine(streamed);
+      term.write(style.yellow("[incidently] That output was cut off; writing it again.\n"));
+      streamed = "";
+    } else if (event.type === "turn") {
+      turn = event.turn;
+    } else if (event.type === "error") {
+      throw new ApiError(500, event.detail);
+    }
+  });
+  if (!turn) throw new ApiError(0, "The command stopped without finishing. Reload the page to see where things stand.");
+  return turn;
 }
 
 async function submitLine() {
@@ -134,13 +172,16 @@ async function submitLine() {
 
   busy = true;
   setStatus("Running…");
+  streamed = "";
   try {
-    const turn = await api(`/api/sessions/${encodeURIComponent(sessionId)}/commands`, {
-      method: "POST",
-      body: { line: command },
-    });
+    const turn = await runCommand(command);
     if (turn.clear_screen) term.clear();
-    writeOutput(turn);
+    if (!turn.ok) {
+      // The streamed output doesn't count; the notice below says why.
+      breakLine(streamed);
+      streamed = "";
+    }
+    writeOutput(turn, streamed);
     if (turn.notice) term.write(style.yellow(`[incidently] ${turn.notice}\n`));
     showPrompt(turn.prompt);
     if (turn.end_requested) {
@@ -150,6 +191,7 @@ async function submitLine() {
       return;
     }
   } catch (error) {
+    breakLine(streamed);
     term.write(style.yellow(`[incidently] ${error.message}\n`));
     showPrompt(line.prompt);
   }

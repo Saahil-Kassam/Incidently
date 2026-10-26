@@ -6,9 +6,14 @@ directly, so the hidden root cause, key evidence, grading criteria,
 established facts, simulation notes, and the model conversation can't reach
 the browser by accident. The root cause is revealed only in the debrief,
 after the session is graded.
+
+A streamed command sends one event per line (newline-delimited JSON): any
+number of ``output`` and ``restart`` events, then one ``turn`` or ``error``.
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -131,6 +136,31 @@ class TurnView(BaseModel):
             notice=turn.notice,
             ok=turn.ok,
         )
+
+
+class OutputEvent(BaseModel):
+    """More of the command's stdout, while the model is still writing it."""
+
+    type: Literal["output"] = "output"
+    text: str
+
+
+class RestartEvent(BaseModel):
+    """The output streamed so far is void; it is being written again."""
+
+    type: Literal["restart"] = "restart"
+
+
+class TurnEvent(BaseModel):
+    """The command is done. ``turn.stdout`` is the complete output."""
+
+    type: Literal["turn"] = "turn"
+    turn: TurnView
+
+
+class ErrorEvent(BaseModel):
+    type: Literal["error"] = "error"
+    detail: str
 
 
 class HintView(BaseModel):

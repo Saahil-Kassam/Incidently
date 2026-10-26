@@ -9,6 +9,12 @@ Sessions are kept in memory (persistence comes in Milestone 7). Each has a
 lock, so a second command sent while one is still being simulated gets
 HTTP 409 instead of corrupting the state.
 
+Commands can be streamed: ``POST .../commands/stream`` answers with
+newline-delimited JSON events (see :mod:`incidently.web.views`) so the
+terminal shows output as the model writes it. The command runs on its own
+thread and finishes even if the browser goes away, so its result is always
+recorded in the session.
+
 The app is meant for the machine it runs on. Requests must name a local host
 (guarding against DNS rebinding), and state-changing requests from another
 origin are refused (guarding against cross-site requests from other tabs),
@@ -18,6 +24,7 @@ because every command spends the user's API credits.
 from __future__ import annotations
 
 import logging
+import queue
 import secrets
 import threading
 from collections import OrderedDict
@@ -29,7 +36,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -42,7 +49,17 @@ from ..grading import debrief
 from ..llm import LLMConfigError, LLMError, LLMRefusalError, LLMUnavailableError, StructuredLLM
 from ..session import Session
 from ..shell import MAX_COMMAND_LENGTH
-from .views import DebriefView, HintView, ScenarioCard, SessionView, TurnView
+from .views import (
+    DebriefView,
+    ErrorEvent,
+    HintView,
+    OutputEvent,
+    RestartEvent,
+    ScenarioCard,
+    SessionView,
+    TurnEvent,
+    TurnView,
+)
 
 log = logging.getLogger(__name__)
 
@@ -101,14 +118,46 @@ class SessionStore:
         return len(self._entries)
 
 
-@contextmanager
-def _exclusive(entry: _Entry) -> Iterator[Session]:
+def _acquire(entry: _Entry) -> None:
     if not entry.lock.acquire(blocking=False):
         raise HTTPException(409, "Still working on the previous request.")
+
+
+@contextmanager
+def _exclusive(entry: _Entry) -> Iterator[Session]:
+    _acquire(entry)
     try:
         yield entry.session
     finally:
         entry.lock.release()
+
+
+class _EventStream:
+    """Events from the command thread, read by the response as NDJSON lines.
+
+    It is also the engine's output listener, so streamed stdout goes straight
+    into the queue.
+    """
+
+    def __init__(self) -> None:
+        self._queue: queue.SimpleQueue[BaseModel | None] = queue.SimpleQueue()
+
+    def write(self, text: str) -> None:
+        self.put(OutputEvent(text=text))
+
+    def restart(self) -> None:
+        self.put(RestartEvent())
+
+    def put(self, event: BaseModel) -> None:
+        self._queue.put(event)
+
+    def close(self) -> None:
+        self._queue.put(None)
+
+    def __iter__(self) -> Iterator[str]:
+        # Starlette runs this blocking iterator on a worker thread.
+        while (event := self._queue.get()) is not None:
+            yield event.model_dump_json() + "\n"
 
 
 def _llm_failure(exc: LLMError) -> HTTPException:
@@ -179,6 +228,28 @@ def create_app(
     def run_command(session_id: str, body: CommandIn) -> TurnView:
         with _exclusive(store.get(session_id)) as session:
             return TurnView.of(engine.run(session, body.line))
+
+    @app.post("/api/sessions/{session_id}/commands/stream")
+    def stream_command(session_id: str, body: CommandIn) -> StreamingResponse:
+        entry = store.get(session_id)
+        _acquire(entry)
+        events = _EventStream()
+
+        def work() -> None:
+            try:
+                turn = engine.run(entry.session, body.line, output=events)
+                events.put(TurnEvent(turn=TurnView.of(turn)))
+            except Exception:
+                log.exception("command failed")
+                events.put(ErrorEvent(detail="Something went wrong running that command."))
+            finally:
+                entry.lock.release()  # before the stream ends, so the next command isn't a 409
+                events.close()
+
+        threading.Thread(target=work, name="incidently-command", daemon=True).start()
+        return StreamingResponse(
+            events, media_type="application/x-ndjson", headers={"Cache-Control": "no-store"}
+        )
 
     @app.post("/api/sessions/{session_id}/hint")
     def next_hint(session_id: str) -> HintView:

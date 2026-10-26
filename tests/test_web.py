@@ -8,6 +8,7 @@ from starlette.testclient import TestClient
 from incidently import __main__ as cli
 from incidently.catalog import Catalog
 from incidently.config import Settings
+from incidently.engine import Engine
 from incidently.fake_llm import FakeLLM
 from incidently.llm import LLMConfigError, LLMRefusalError, LLMResponseError, LLMUnavailableError
 from incidently.offline import offline_reply
@@ -82,6 +83,14 @@ def url(session_id, action=""):
     return f"/api/sessions/{session_id}" + (f"/{action}" if action else "")
 
 
+def stream(client, session_id, line):
+    """Run a command through the streaming endpoint and return its events."""
+    response = client.post(url(session_id, "commands/stream"), json={"line": line})
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/x-ndjson"
+    return [json.loads(event) for event in response.text.splitlines()]
+
+
 # --- scenarios and sessions --------------------------------------------------------
 
 
@@ -134,8 +143,14 @@ def test_setup_failures_become_clear_http_errors(catalog, error, status, text):
 
 
 def test_unknown_session_is_404(client):
-    for method, action in [("get", ""), ("post", "commands"), ("post", "hint"), ("post", "finish")]:
-        kwargs = {"json": {"line": "ls"}} if action == "commands" else {}
+    for method, action in [
+        ("get", ""),
+        ("post", "commands"),
+        ("post", "commands/stream"),
+        ("post", "hint"),
+        ("post", "finish"),
+    ]:
+        kwargs = {"json": {"line": "ls"}} if action.startswith("commands") else {}
         assert getattr(client, method)(url("nope", action), **kwargs).status_code == 404
 
 
@@ -175,11 +190,66 @@ def test_overlong_command_is_rejected(client, session_id):
     assert client.post(url(session_id, "commands"), json={"line": "x" * 5000}).status_code == 422
 
 
-def test_concurrent_request_on_a_busy_session_is_409(client, session_id):
+@pytest.mark.parametrize("action", ["commands", "commands/stream"])
+def test_concurrent_request_on_a_busy_session_is_409(client, session_id, action):
     entry = client.app.state.store.get(session_id)
     with entry.lock:
-        response = client.post(url(session_id, "commands"), json={"line": "ls"})
+        response = client.post(url(session_id, action), json={"line": "ls"})
     assert response.status_code == 409
+
+
+# --- streamed commands -----------------------------------------------------------
+
+
+def test_streamed_command_sends_output_then_the_turn(client, llm, session_id):
+    stdout = "PING 10.0.0.1 56(84) bytes of data.\n64 bytes from 10.0.0.1: icmp_seq=1 ttl=64\n"
+    llm.queue(reply(stdout, new_facts=["SECRET-FACT"]))
+
+    *outputs, last = stream(client, session_id, "ping -c1 10.0.0.1")
+
+    assert len(outputs) > 1
+    assert {e["type"] for e in outputs} == {"output"}
+    assert "".join(e["text"] for e in outputs) == stdout
+    assert last["type"] == "turn"
+    assert last["turn"]["stdout"] == stdout and last["turn"]["ok"]
+    assert client.get(url(session_id)).json()["transcript"][-1]["stdout"] == stdout
+
+
+def test_streamed_local_command_sends_only_the_turn(client, session_id):
+    (event,) = stream(client, session_id, "history")
+    assert event["type"] == "turn"
+    assert "history" in event["turn"]["stdout"]
+
+
+def test_streamed_command_failure_is_a_notice(client, llm, session_id):
+    llm.queue(LLMUnavailableError("down"))
+    (event,) = stream(client, session_id, "ip route")
+    assert not event["turn"]["ok"]
+    assert "busy" in event["turn"]["notice"]
+
+
+def test_unexpected_error_is_an_error_event_and_frees_the_session(
+    client, llm, session_id, monkeypatch
+):
+    def broken(self, session, line, output=None):
+        raise RuntimeError("bug")
+
+    with monkeypatch.context() as m:
+        m.setattr(Engine, "run", broken)
+        (event,) = stream(client, session_id, "ls")
+    assert event == {"type": "error", "detail": "Something went wrong running that command."}
+
+    llm.queue(reply("file\n"))
+    assert stream(client, session_id, "ls")[-1]["turn"]["stdout"] == "file\n"
+
+
+def test_cross_origin_streamed_commands_are_refused(client, session_id):
+    response = client.post(
+        url(session_id, "commands/stream"),
+        json={"line": "ls"},
+        headers={"Origin": "http://evil.example"},
+    )
+    assert response.status_code == 403
 
 
 # --- hints and grading -------------------------------------------------------------
@@ -222,7 +292,7 @@ def test_failed_grading_can_be_retried(client, llm, session_id):
 
 
 def test_nothing_secret_reaches_the_browser_before_grading(catalog, bootstrap):
-    """Play a whole offline session and scan every response for hidden text."""
+    """Play a whole offline session and scan every response, streamed ones too, for hidden text."""
     llm = FakeLLM(bootstrap, default=offline_reply)
     client = TestClient(create_app(Settings(), llm, catalog=catalog, allowed_hosts=["testserver"]))
     scenario = catalog.get(LAB)
@@ -233,9 +303,13 @@ def test_nothing_secret_reaches_the_browser_before_grading(catalog, bootstrap):
     sid = start.json()["id"]
     for line in ("dig example.com", "ssh core-rtr1", "conf t", "end", "history", "exit"):
         responses.append(client.post(url(sid, "commands"), json={"line": line}))
+    streamed = [
+        client.post(url(sid, "commands/stream"), json={"line": line}).text
+        for line in ("cat /etc/resolv.conf", "ssh dc01", "Get-DnsServerForwarder")
+    ]
     responses += [client.post(url(sid, "hint")), client.get(url(sid))]
 
-    text = "\n".join(json.dumps(r.json()) for r in responses)
+    text = "\n".join([*(json.dumps(r.json()) for r in responses), *streamed])
     secrets = [
         *scenario.root_cause_variants,
         scenario.hidden_flag,

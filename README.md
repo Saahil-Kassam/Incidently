@@ -84,9 +84,10 @@ src/incidently/             application package
   shell.py                  built-ins handled locally; shell prompts
   prompts.py                prompt text for setup and simulation calls
   engine.py                 runs a playthrough: setup, then one call per command
+  streaming.py              decodes a command's stdout while the reply streams in
   grading.py                scoring rules and the debrief
   __main__.py               `python -m incidently`: starts the server
-  web/app.py                FastAPI app: JSON API, pages, request checks
+  web/app.py                FastAPI app: JSON API, streamed commands, pages, request checks
   web/views.py              the only shapes the browser receives
   web/static/               hub, play, and debrief pages (HTML + ES modules)
   web/static/vendor/xterm/  xterm.js 5.5.0 + fit addon, vendored (MIT)
@@ -137,6 +138,10 @@ Settings are environment variables, read from a local `.env` file if present.
    far. The reply is the output plus state changes, which the engine applies
    and checks against the host inventory. The model sees the last 40 commands;
    older ones are dropped in chunks, and the facts list carries continuity.
+   Output appears in the terminal as the model writes it: `stdout` is the
+   reply's first field, so it is decoded from the partial JSON and streamed to
+   the browser before the rest of the reply (the state changes, which can name
+   hidden details) has been written. Those are never streamed.
 3. **Handled locally, with no API call:** `clear`, `history`, `exit` (leaves a
    remote session; on the first host it asks to end the incident), Cisco
    `end`/`exit` in configuration mode, and interactive programs such as `vim`,
@@ -179,6 +184,11 @@ a safety classifier declines a request, the API re-runs it on a fallback model
 (`fallbacks: "default"`). When that happens the result reports the model that
 actually served it (`LLMResult.model`, `LLMResult.fell_back`), and the log line
 for the call shows `fallback=True`.
+
+Every call streams. Simulated commands pass a listener that hears the reply
+text as it arrives; if an attempt is retried or a fallback model takes over,
+the listener is told to start again and the terminal notes that the output
+was cut off before showing the new one.
 
 Host simulation prompts can trip the classifier: in testing,
 `claude-opus-5-5` requests were served by `claude-opus-4-8`. The game still
