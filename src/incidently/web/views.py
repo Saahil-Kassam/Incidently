@@ -21,6 +21,7 @@ from ..engine import Hint, Turn
 from ..grading import Debrief
 from ..scenario import Scenario
 from ..session import Session
+from ..storage import Attempt, AttemptStatus, Progress, ProgressStatus
 
 
 class ScenarioCard(BaseModel):
@@ -40,6 +41,74 @@ class ScenarioCard(BaseModel):
             topic=scenario.topic,
             difficulty=scenario.difficulty,
             summary=scenario.summary,
+        )
+
+
+class ProgressView(BaseModel):
+    """The player's record on one scenario, for the hub's badges."""
+
+    scenario_id: str
+    status: ProgressStatus
+    attempts: int
+    best_percent: int | None
+    best_grade: str | None
+    resume_id: str | None  # an attempt not yet graded, to pick up again
+
+    @classmethod
+    def of(cls, scenario_id: str, progress: Progress | None) -> ProgressView:
+        if progress is None:
+            return cls(
+                scenario_id=scenario_id,
+                status="not_started",
+                attempts=0,
+                best_percent=None,
+                best_grade=None,
+                resume_id=None,
+            )
+        best = progress.best
+        return cls(
+            scenario_id=scenario_id,
+            status=progress.status,
+            attempts=progress.attempts,
+            best_percent=best.percent if best else None,
+            best_grade=best.grade if best else None,
+            resume_id=progress.resume_id,
+        )
+
+
+class AttemptView(BaseModel):
+    """One past or unfinished attempt in the history. Score fields are null until graded."""
+
+    session_id: str
+    scenario_id: str
+    title: str
+    status: AttemptStatus
+    started_at: str
+    ended_at: str | None
+    duration_seconds: int | None
+    commands: int
+    hints: int
+    total: int | None
+    maximum: int | None
+    percent: int | None
+    grade: str | None
+
+    @classmethod
+    def of(cls, attempt: Attempt) -> AttemptView:
+        return cls(
+            session_id=attempt.session_id,
+            scenario_id=attempt.scenario_id,
+            title=attempt.title,
+            status=attempt.status,
+            started_at=attempt.started_at,
+            ended_at=attempt.ended_at,
+            duration_seconds=attempt.duration_seconds,
+            commands=attempt.commands,
+            hints=attempt.hints,
+            total=attempt.total,
+            maximum=attempt.maximum,
+            percent=attempt.percent,
+            grade=attempt.grade,
         )
 
 

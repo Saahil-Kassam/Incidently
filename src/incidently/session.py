@@ -7,8 +7,8 @@ Cisco mode, service changes, the facts the model has committed to, and the
 command history. A compact snapshot goes with every command so the model
 never loses track of where the player is.
 
-Sessions are Pydantic models, so they round-trip through JSON unchanged; a
-later milestone stores them in SQLite.
+Sessions are Pydantic models, so they round-trip through JSON unchanged;
+:mod:`incidently.storage` saves them in SQLite that way.
 """
 
 from __future__ import annotations

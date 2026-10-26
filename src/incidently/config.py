@@ -8,7 +8,9 @@ default except the API key, which the Anthropic SDK looks up itself.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Literal
 
 from dotenv import find_dotenv, load_dotenv
@@ -26,7 +28,24 @@ _ENV_VARS = {
     "INCIDENTLY_FAKE_LLM": "fake_llm",
     "INCIDENTLY_API_MAX_RETRIES": "max_retries",
     "INCIDENTLY_API_TIMEOUT": "timeout",
+    "INCIDENTLY_DATA_DIR": "data_dir",
 }
+
+
+def default_data_dir() -> Path:
+    """Where saved sessions live unless ``INCIDENTLY_DATA_DIR`` says otherwise.
+
+    The per-user application data folder for the platform: ``%LOCALAPPDATA%``
+    on Windows, ``~/Library/Application Support`` on macOS, and
+    ``$XDG_DATA_HOME`` (default ``~/.local/share``) elsewhere.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
+        return Path(base) / "Incidently"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Incidently"
+    base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    return Path(base) / "incidently"
 
 
 class ConfigError(Exception):
@@ -50,6 +69,19 @@ class Settings(BaseModel):
         default=4, ge=0, le=10, description="SDK retries for rate limits, 5xx, and network errors"
     )
     timeout: float = Field(default=120.0, gt=0, description="Seconds per API request")
+    data_dir: Path | None = Field(
+        default=None, description="Folder for saved sessions (default: see default_data_dir)"
+    )
+
+    @property
+    def database_path(self) -> Path:
+        """The SQLite file for saved sessions.
+
+        Offline mode keeps its own file, so placeholder sessions never mix
+        with real ones or count towards progress.
+        """
+        name = "incidently-offline.db" if self.fake_llm else "incidently.db"
+        return (self.data_dir or default_data_dir()) / name
 
     @field_validator("fake_llm", mode="before")
     @classmethod
@@ -61,6 +93,11 @@ class Settings(BaseModel):
             if lowered in {"", "0", "false", "no", "off"}:
                 return False
         return value
+
+    @field_validator("data_dir")
+    @classmethod
+    def _expand_home(cls, value: Path | None) -> Path | None:
+        return value.expanduser() if value is not None else None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:

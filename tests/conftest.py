@@ -77,6 +77,15 @@ LAB_SCENARIO = {
 }
 
 
+@pytest.fixture(autouse=True)
+def isolated_data_dir(tmp_path, monkeypatch):
+    """Point the default data folder at a temporary one, so no test touches real saves."""
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr("incidently.config.default_data_dir", lambda: data_dir)
+    monkeypatch.delenv("INCIDENTLY_DATA_DIR", raising=False)
+    return data_dir
+
+
 @pytest.fixture
 def lab_instance():
     """A playable instance with one host per shell: bash, Cisco IOS, PowerShell."""

@@ -14,6 +14,7 @@ import webbrowser
 from . import __version__
 from .config import ConfigError, Settings
 from .llm import LLMError, create_llm
+from .storage import Database, StorageError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,7 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = Settings.from_env()
         llm = create_llm(settings)
-    except (ConfigError, LLMError) as exc:
+        database = Database(settings.database_path)
+    except (ConfigError, LLMError, StorageError) as exc:
         print(f"incidently: {exc}", file=sys.stderr)
         return 2
 
@@ -40,10 +42,11 @@ def main(argv: list[str] | None = None) -> int:
     from .web.app import LOCAL_HOSTS, create_app
 
     hosts = LOCAL_HOSTS if args.host in LOCAL_HOSTS else [*LOCAL_HOSTS, args.host]
-    app = create_app(settings, llm, allowed_hosts=hosts)
+    app = create_app(settings, llm, database=database, allowed_hosts=hosts)
     url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}/"
     mode = "offline mode (placeholder output)" if settings.fake_llm else f"model {settings.model}"
     print(f"Incidently {__version__} running at {url}  ({mode}). Press Ctrl+C to stop.")
+    print(f"Sessions are saved in {database.path}")
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, args=(url,)).start()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

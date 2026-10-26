@@ -5,9 +5,11 @@ Pages: ``/`` (scenario hub), ``/play/<session>`` (terminal), and
 xterm.js vendored under ``static/vendor``, so nothing needs building and the
 app works offline.
 
-Sessions are kept in memory (persistence comes in Milestone 7). Each has a
-lock, so a second command sent while one is still being simulated gets
-HTTP 409 instead of corrupting the state.
+Sessions are saved in SQLite (:mod:`incidently.storage`) after every change,
+so they survive a restart. Those in use are cached in memory with a lock
+each, so a second command sent while one is still being simulated gets
+HTTP 409 instead of corrupting the state. The hub reads the history and
+per-scenario progress from the same database.
 
 Commands can be streamed: ``POST .../commands/stream`` answers with
 newline-delimited JSON events (see :mod:`incidently.web.views`) so the
@@ -27,7 +29,6 @@ import logging
 import queue
 import secrets
 import threading
-from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -49,11 +50,14 @@ from ..grading import debrief
 from ..llm import LLMConfigError, LLMError, LLMRefusalError, LLMUnavailableError, StructuredLLM
 from ..session import Session
 from ..shell import MAX_COMMAND_LENGTH
+from ..storage import Database, StorageError, progress
 from .views import (
+    AttemptView,
     DebriefView,
     ErrorEvent,
     HintView,
     OutputEvent,
+    ProgressView,
     RestartEvent,
     ScenarioCard,
     SessionView,
@@ -65,7 +69,6 @@ log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(str(resources.files("incidently.web") / "static"))
 LOCAL_HOSTS = ["127.0.0.1", "localhost", "[::1]"]
-MAX_SESSIONS = 50
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
@@ -87,35 +90,43 @@ class CommandIn(BaseModel):
 
 @dataclass
 class _Entry:
+    id: str
     session: Session
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 class SessionStore:
-    """In-memory sessions by unguessable id; the oldest are dropped past ``limit``."""
+    """Sessions by unguessable id, saved in the database and cached once used.
 
-    def __init__(self, limit: int = MAX_SESSIONS) -> None:
-        self._limit = limit
-        self._entries: OrderedDict[str, _Entry] = OrderedDict()
+    The cache keeps one entry (and so one lock) per session for the life of
+    the server; the database is the source of truth.
+    """
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+        self._entries: dict[str, _Entry] = {}
         self._lock = threading.Lock()
 
     def add(self, session: Session) -> str:
         session_id = secrets.token_urlsafe(16)
+        self.database.save(session_id, session)
         with self._lock:
-            self._entries[session_id] = _Entry(session)
-            while len(self._entries) > self._limit:
-                self._entries.popitem(last=False)
+            self._entries[session_id] = _Entry(session_id, session)
         return session_id
 
     def get(self, session_id: str) -> _Entry:
         with self._lock:
             entry = self._entries.get(session_id)
-        if entry is None:
-            raise HTTPException(404, "No such session. It may have expired; start a new one.")
+            if entry is None:
+                # Loaded while holding the lock, so two requests can't cache two copies.
+                session = self.database.load(session_id)
+                if session is None:
+                    raise HTTPException(404, "No such session. Start a new one from the hub.")
+                entry = self._entries[session_id] = _Entry(session_id, session)
         return entry
 
-    def __len__(self) -> int:
-        return len(self._entries)
+    def save(self, entry: _Entry) -> None:
+        self.database.save(entry.id, entry.session)
 
 
 def _acquire(entry: _Entry) -> None:
@@ -124,12 +135,16 @@ def _acquire(entry: _Entry) -> None:
 
 
 @contextmanager
-def _exclusive(entry: _Entry) -> Iterator[Session]:
+def _exclusive(store: SessionStore, entry: _Entry) -> Iterator[Session]:
+    """Hold the session's lock, and save it on the way out, even after an error."""
     _acquire(entry)
     try:
         yield entry.session
     finally:
-        entry.lock.release()
+        try:
+            store.save(entry)
+        finally:
+            entry.lock.release()
 
 
 class _EventStream:
@@ -178,15 +193,22 @@ def create_app(
     llm: StructuredLLM,
     *,
     catalog: Catalog | None = None,
+    database: Database | None = None,
     allowed_hosts: list[str] | None = None,
 ) -> FastAPI:
+    """Build the app. ``database`` defaults to the file named by the settings."""
     catalog = catalog or Catalog.load()
     engine = Engine(llm, settings)
-    store = SessionStore()
+    store = SessionStore(database or Database(settings.database_path))
 
     app = FastAPI(title="Incidently", version=__version__, docs_url=None, redoc_url=None)
     app.state.store = store
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
+
+    @app.exception_handler(StorageError)
+    async def storage_failure(request: Request, exc: StorageError) -> JSONResponse:
+        log.error("storage failure: %s", exc)
+        return JSONResponse({"detail": f"Saved sessions are unavailable: {exc}"}, status_code=500)
 
     @app.middleware("http")
     async def same_origin_only(request: Request, call_next):
@@ -204,6 +226,15 @@ def create_app(
     @app.get("/api/scenarios")
     def list_scenarios() -> list[ScenarioCard]:
         return [ScenarioCard.of(s) for s in catalog]
+
+    @app.get("/api/progress")
+    def scenario_progress() -> list[ProgressView]:
+        records = progress(store.database.attempts())
+        return [ProgressView.of(s.id, records.get(s.id)) for s in catalog]
+
+    @app.get("/api/history")
+    def history() -> list[AttemptView]:
+        return [AttemptView.of(a) for a in store.database.attempts()]
 
     @app.post("/api/sessions", status_code=201)
     def start_session(body: NewSession) -> SessionView:
@@ -226,7 +257,7 @@ def create_app(
 
     @app.post("/api/sessions/{session_id}/commands")
     def run_command(session_id: str, body: CommandIn) -> TurnView:
-        with _exclusive(store.get(session_id)) as session:
+        with _exclusive(store, store.get(session_id)) as session:
             return TurnView.of(engine.run(session, body.line))
 
     @app.post("/api/sessions/{session_id}/commands/stream")
@@ -238,7 +269,11 @@ def create_app(
         def work() -> None:
             try:
                 turn = engine.run(entry.session, body.line, output=events)
+                store.save(entry)
                 events.put(TurnEvent(turn=TurnView.of(turn)))
+            except StorageError as exc:
+                log.error("storage failure: %s", exc)
+                events.put(ErrorEvent(detail=f"The command ran but couldn't be saved: {exc}"))
             except Exception:
                 log.exception("command failed")
                 events.put(ErrorEvent(detail="Something went wrong running that command."))
@@ -253,7 +288,7 @@ def create_app(
 
     @app.post("/api/sessions/{session_id}/hint")
     def next_hint(session_id: str) -> HintView:
-        with _exclusive(store.get(session_id)) as session:
+        with _exclusive(store, store.get(session_id)) as session:
             hint = engine.hint(session)
         if hint is None:
             raise HTTPException(409, "No hints left for this incident.")
@@ -261,7 +296,8 @@ def create_app(
 
     @app.post("/api/sessions/{session_id}/finish")
     def finish(session_id: str) -> DebriefView:
-        with _exclusive(store.get(session_id)) as session:
+        # Saved even if grading fails: the session has ended either way.
+        with _exclusive(store, store.get(session_id)) as session:
             try:
                 result = engine.finish(session)
             except LLMError as exc:

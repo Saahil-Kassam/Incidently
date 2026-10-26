@@ -7,8 +7,9 @@ Pick an incident from the hub, get a ticket, and troubleshoot simulated hosts
 output for every command and keeps the environment consistent as you change it.
 When you submit, you get a score and a debrief explaining the real root cause.
 
-> **Status:** v0.2.0: four networking incidents, played in the browser with
-> output streaming in as it is generated, and graded at the end. See the
+> **Status:** v0.3.0: four networking incidents, played in the browser with
+> output streaming in as it is generated, graded at the end, and saved so you
+> can resume them and track your progress. See the
 > [roadmap](docs/roadmap.md) for what comes next.
 
 ## Requirements
@@ -50,7 +51,14 @@ $env:INCIDENTLY_FAKE_LLM = "1"; python -m incidently
    Grading takes up to a minute; the debrief shows your score, each checkpoint,
    risky commands, the real root cause, and how an expert would have solved it.
 
-Sessions are kept in memory, so restarting the app ends them.
+Every session is saved as you play, so you can close the app and pick up
+where you left off: the hub marks each incident *In progress*, *Passed*, or
+*Not passed yet* with your best score, offers to resume an unfinished attempt,
+and lists all your attempts with their date, time taken, and result. Graded
+attempts reopen their debrief. Sessions are saved in a SQLite file in your
+user data folder (`%LOCALAPPDATA%\Incidently` on Windows; see
+`INCIDENTLY_DATA_DIR` below), and offline mode keeps a separate file, so
+placeholder sessions never count towards your progress.
 
 ## Development setup
 
@@ -86,6 +94,7 @@ src/incidently/             application package
   engine.py                 runs a playthrough: setup, then one call per command
   streaming.py              decodes a command's stdout while the reply streams in
   grading.py                scoring rules and the debrief
+  storage.py                saved sessions (SQLite), history and progress
   __main__.py               `python -m incidently`: starts the server
   web/app.py                FastAPI app: JSON API, streamed commands, pages, request checks
   web/views.py              the only shapes the browser receives
@@ -126,6 +135,7 @@ Settings are environment variables, read from a local `.env` file if present.
 | `INCIDENTLY_FAKE_LLM` | `0` | `1` plays offline with placeholder output and never calls the API |
 | `INCIDENTLY_API_MAX_RETRIES` | `4` | Retries for rate limits, 5xx errors, and network drops |
 | `INCIDENTLY_API_TIMEOUT` | `120` | Seconds per API request |
+| `INCIDENTLY_DATA_DIR` | per-user data folder | Where sessions are saved: `incidently.db`, and `incidently-offline.db` for offline mode. Defaults to `%LOCALAPPDATA%\Incidently` (Windows), `~/Library/Application Support/Incidently` (macOS), or `~/.local/share/incidently` |
 
 ### How a playthrough runs
 

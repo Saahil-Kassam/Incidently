@@ -6,6 +6,29 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
+Sessions are saved, so incidents survive a restart; the hub shows your progress and history.
+
+### Added
+- Saved sessions (`incidently.storage`): every session is stored in a local SQLite file after
+  each command, hint, and submission, so incidents survive a restart and can be resumed. The
+  file lives in the per-user data folder, or `INCIDENTLY_DATA_DIR`; offline mode uses its own
+  file so placeholder sessions never count as progress. The schema is versioned with
+  `PRAGMA user_version`, and a file from a newer version is refused rather than misread.
+- Hub progress: each incident shows *In progress*, *Passed*, or *Not passed yet*, the best
+  score, and the number of attempts. Opening an incident with an unfinished attempt offers to
+  resume it or start a new one.
+- Incident history on the hub: every attempt with its start date, time taken, commands, hints,
+  and result, linking to its debrief (or back into the session if it isn't finished).
+- `GET /api/progress` and `GET /api/history`, built from allowlisted views like the rest of
+  the API.
+- The start-up message says where sessions are saved; an unusable data folder is reported
+  before the server starts.
+
+### Changed
+- Sessions are no longer limited to the 50 most recent; the database keeps them all.
+
 ## [0.2.0] - 2026-10-26
 
 Command output streams into the terminal as the model writes it.
