@@ -1,16 +1,30 @@
-// Scenario hub: list the incidents with your progress, start or resume one, and your past attempts.
+// Scenario hub: every incident with your progress, narrowed by search and filters.
+// Filters live in the URL, so a filtered view survives a reload and the back button.
 
-import { api, ask, el, hideOverlay, showBusy, showError, showMode } from "./common.js";
+import { api, el, errorState, initChrome, plural } from "./common.js";
 
 const grid = document.getElementById("scenarios");
+const search = document.getElementById("search");
+const count = document.getElementById("result-count");
 
 const BADGES = {
   passed: { label: "Passed", class: "passed" },
   in_progress: { label: "In progress", class: "in-progress" },
   attempted: { label: "Not passed yet", class: "attempted" },
 };
+const STATUS_LABELS = {
+  not_started: "Not started",
+  in_progress: "In progress",
+  passed: "Passed",
+  attempted: "Not passed yet",
+};
+const DIFFICULTY_ORDER = ["beginner", "intermediate", "advanced"];
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+let scenarios = [];
+let progressById = new Map();
+const state = { q: "", category: "", difficulty: "", status: "" };
+
+// --- cards ---------------------------------------------------------------------------------------
 
 function progressLine(progress) {
   const badge = BADGES[progress.status];
@@ -24,8 +38,8 @@ function progressLine(progress) {
   );
 }
 
-function card(scenario, progress) {
-  return el("button", { class: "card", onclick: () => start(scenario, progress) },
+function card(scenario) {
+  return el("a", { class: "card", href: `/scenarios/${encodeURIComponent(scenario.id)}` },
     el("div", { class: "tags" },
       el("span", { class: "tag" }, scenario.category),
       el("span", { class: "tag" }, scenario.topic),
@@ -33,101 +47,131 @@ function card(scenario, progress) {
     ),
     el("h2", {}, scenario.title),
     el("p", {}, scenario.summary),
-    progressLine(progress),
+    progressLine(progressById.get(scenario.id)),
   );
 }
 
-async function start(scenario, progress) {
-  const resume = progress.resume_id;
-  const choice = await ask(scenario.title, [
-    scenario.summary,
-    resume
-      ? el("p", { class: "small" }, "You have an unfinished attempt at this incident. Pick up where you left off, or start a new one.")
-      : null,
-    el("p", { class: "muted small" },
-      "Setup takes up to a minute while the incident is generated. Hints cost 5 points each; " +
-      "risky or destructive commands cost points too."),
-  ].filter(Boolean), resume
-    ? [{ label: "Cancel" }, { label: "Start a new attempt" }, { label: "Resume", class: "primary" }]
-    : [{ label: "Cancel" }, { label: "Start incident", class: "primary" }]);
+// --- filtering ---------------------------------------------------------------------------------
 
-  if (choice === "Resume") {
-    location.assign(`/play/${encodeURIComponent(resume)}`);
-    return;
-  }
-  if (choice !== "Start incident" && choice !== "Start a new attempt") return;
-
-  showBusy("Setting up the incident…", "Writing the ticket and preparing the hosts. This usually takes under a minute.");
-  try {
-    const session = await api("/api/sessions", { method: "POST", body: { scenario_id: scenario.id } });
-    location.assign(`/play/${encodeURIComponent(session.id)}`);
-  } catch (error) {
-    hideOverlay();
-    await showError("Couldn't start the incident", error);
-  }
+function haystack(s) {
+  return [s.title, s.summary, s.category, s.topic, s.difficulty, ...s.skills].join(" ").toLowerCase();
 }
 
-// --- history ---------------------------------------------------------------------------
-
-function duration(seconds) {
-  if (seconds === null) return "";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 1) return "under a minute";
-  if (minutes < 60) return `${minutes} min`;
-  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+function matches(s) {
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const text = haystack(s);
+  return words.every((w) => text.includes(w))
+    && (!state.category || s.category === state.category)
+    && (!state.difficulty || s.difficulty === state.difficulty)
+    && (!state.status || progressById.get(s.id).status === state.status);
 }
 
-const when = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+const filtered = () => Object.values(state).some(Boolean);
 
-function result(attempt) {
-  const id = encodeURIComponent(attempt.session_id);
-  switch (attempt.status) {
-    case "in_progress":
-      return [el("span", { class: "badge in-progress" }, "In progress"), el("a", { href: `/play/${id}` }, "Resume")];
-    case "ungraded":
-      return [el("span", { class: "badge attempted" }, "Not graded"), el("a", { href: `/play/${id}` }, "Finish grading")];
-    default:
-      return [
-        el("span", { class: `badge ${attempt.status === "passed" ? "passed" : "attempted"}` },
-          `${attempt.grade} · ${attempt.total}/${attempt.maximum}`),
-        el("a", { href: `/debrief/${id}` }, "Debrief"),
-      ];
+function clearFilters() {
+  Object.assign(state, { q: "", category: "", difficulty: "", status: "" });
+  search.value = "";
+  update();
+  search.focus();
+}
+
+function render() {
+  const shown = scenarios.filter(matches);
+  if (shown.length) {
+    grid.replaceChildren(...shown.map(card));
+  } else {
+    grid.replaceChildren(el("div", { class: "state" },
+      el("p", {}, state.q ? `No incidents match “${state.q}” with these filters.` : "No incidents match these filters."),
+      el("button", { onclick: clearFilters }, "Clear search and filters"),
+    ));
   }
+  count.textContent = filtered() ? `Showing ${shown.length} of ${plural(scenarios.length, "incident")}` : "";
 }
 
-function historyTable(attempts) {
-  return el("table", { class: "history" },
-    el("thead", {}, el("tr", {},
-      ...["Incident", "Started", "Time taken", "Commands", "Hints", "Result"].map((h) => el("th", { scope: "col" }, h)),
-    )),
-    el("tbody", {}, attempts.map((a) => el("tr", {},
-      el("td", {}, a.title),
-      el("td", {}, when(a.started_at)),
-      el("td", {}, duration(a.duration_seconds)),
-      el("td", { class: "num" }, String(a.commands)),
-      el("td", { class: "num" }, String(a.hints)),
-      el("td", {}, el("span", { class: "result" }, ...result(a))),
-    ))),
+function chipGroup(name, label, options) {
+  // A group with one choice can't narrow anything, so it isn't shown.
+  if (options.length < 2) return null;
+  const chip = (value, text) => el("button", {
+    type: "button",
+    class: "chip",
+    "aria-pressed": String(state[name] === value),
+    onclick: () => { state[name] = value; update(); },
+  }, text);
+  return el("div", { class: "chips", role: "group", "aria-label": label },
+    el("span", { class: "chips-label", "aria-hidden": "true" }, label),
+    chip("", "All"),
+    options.map(([value, text]) => chip(value, text)),
   );
 }
 
-// --- start -----------------------------------------------------------------------------------
+function renderFilters() {
+  const unique = (values) => [...new Set(values)];
+  const categories = unique(scenarios.map((s) => s.category)).sort().map((c) => [c, c]);
+  const difficulties = DIFFICULTY_ORDER
+    .filter((d) => scenarios.some((s) => s.difficulty === d))
+    .map((d) => [d, d[0].toUpperCase() + d.slice(1)]);
+  // Only statuses that apply to something, plus the active one so it can always be seen.
+  const statuses = Object.entries(STATUS_LABELS).filter(([status]) =>
+    state.status === status || scenarios.some((s) => progressById.get(s.id).status === status));
+  document.getElementById("filters").replaceChildren(...[
+    chipGroup("category", "Category", categories),
+    chipGroup("difficulty", "Difficulty", difficulties),
+    chipGroup("status", "Status", statuses),
+  ].filter(Boolean));
+}
+
+function saveToUrl() {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(state)) if (value) params.set(key, value);
+  const query = params.toString();
+  history.replaceState(null, "", query ? `/?${query}` : "/");
+}
+
+function readFromUrl() {
+  const params = new URLSearchParams(location.search);
+  for (const key of Object.keys(state)) state[key] = params.get(key) || "";
+  search.value = state.q;
+}
+
+function update() {
+  saveToUrl();
+  renderFilters();
+  render();
+}
+
+// Filter as you type: no debounce, the list is small and local.
+search.addEventListener("input", () => {
+  state.q = search.value.trim();
+  saveToUrl();
+  render();
+});
+search.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (search.value) {
+    search.value = "";
+    state.q = "";
+    saveToUrl();
+    render();
+  } else {
+    search.blur();
+  }
+});
+
+// --- start -------------------------------------------------------------------------------------
 
 async function load() {
+  grid.replaceChildren(el("p", { class: "muted" }, "Loading incidents…"));
   try {
-    const [scenarios, progress, history] = await Promise.all([
-      api("/api/scenarios"), api("/api/progress"), api("/api/history"),
-    ]);
-    const byId = new Map(progress.map((p) => [p.scenario_id, p]));
-    grid.replaceChildren(...scenarios.map((s) => card(s, byId.get(s.id))));
-    if (history.length) {
-      document.getElementById("history").replaceChildren(historyTable(history));
-      document.getElementById("history-section").hidden = false;
-    }
+    const [list, progress] = await Promise.all([api("/api/scenarios"), api("/api/progress")]);
+    scenarios = list;
+    progressById = new Map(progress.map((p) => [p.scenario_id, p]));
+    readFromUrl();
+    update();
   } catch (error) {
-    grid.replaceChildren(el("p", { class: "error" }, error.message));
+    count.textContent = "";
+    grid.replaceChildren(errorState("Couldn't load the incidents", error, load));
   }
 }
 
-showMode();
+initChrome();
 load();

@@ -1,9 +1,10 @@
-"""The local web app: a JSON API over the engine, plus three static pages.
+"""The local web app: a JSON API over the engine, plus five static pages.
 
-Pages: ``/`` (scenario hub), ``/play/<session>`` (terminal), and
-``/debrief/<session>`` (results). They are plain HTML and ES modules, with
-xterm.js vendored under ``static/vendor``, so nothing needs building and the
-app works offline.
+Pages: ``/`` (scenario hub), ``/scenarios/<id>`` (one scenario and your
+attempts), ``/progress`` (dashboard and history), ``/play/<session>``
+(terminal), and ``/debrief/<session>`` (results). They are plain HTML and
+ES modules, with xterm.js vendored under ``static/vendor``, so nothing
+needs building and the app works offline.
 
 Sessions are saved in SQLite (:mod:`incidently.storage`) after every change,
 so they survive a restart. Those in use are cached in memory with a lock
@@ -60,7 +61,9 @@ from .views import (
     ProgressView,
     RestartEvent,
     ScenarioCard,
+    ScenarioDetailView,
     SessionView,
+    StatsView,
     TurnEvent,
     TurnView,
 )
@@ -227,6 +230,18 @@ def create_app(
     def list_scenarios() -> list[ScenarioCard]:
         return [ScenarioCard.of(s) for s in catalog]
 
+    @app.get("/api/scenarios/{scenario_id}")
+    def scenario_detail(scenario_id: str) -> ScenarioDetailView:
+        try:
+            scenario = catalog.get(scenario_id)
+        except ScenarioError:
+            raise HTTPException(404, f"Unknown scenario {scenario_id!r}.") from None
+        return ScenarioDetailView.of(scenario, store.database.attempts())
+
+    @app.get("/api/stats")
+    def stats() -> StatsView:
+        return StatsView.of(catalog, store.database.attempts())
+
     @app.get("/api/progress")
     def scenario_progress() -> list[ProgressView]:
         records = progress(store.database.attempts())
@@ -324,6 +339,14 @@ def create_app(
     @app.get("/", include_in_schema=False)
     def hub_page() -> Response:
         return page("index.html")
+
+    @app.get("/scenarios/{scenario_id}", include_in_schema=False)
+    def scenario_page(scenario_id: str) -> Response:
+        return page("scenario.html")
+
+    @app.get("/progress", include_in_schema=False)
+    def progress_page() -> Response:
+        return page("progress.html")
 
     @app.get("/play/{session_id}", include_in_schema=False)
     def play_page(session_id: str) -> Response:

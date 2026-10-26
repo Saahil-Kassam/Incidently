@@ -127,6 +127,7 @@ def test_lists_scenarios(client):
         "topic": "DNS",
         "difficulty": "beginner",
         "summary": "Users can't resolve names.",
+        "skills": ["DNS", "Log analysis"],
     }
 
 
@@ -333,6 +334,7 @@ def test_nothing_secret_reaches_the_browser_before_grading(catalog, bootstrap, t
     ]
     responses += [client.post(url(sid, "hint")), client.get(url(sid))]
     responses += [client.get("/api/history"), client.get("/api/progress")]
+    responses += [client.get(f"/api/scenarios/{LAB}"), client.get("/api/stats")]
 
     text = "\n".join([*(json.dumps(r.json()) for r in responses), *streamed])
     secrets = [
@@ -497,6 +499,65 @@ def test_progress_after_passing(client, llm, session_id):
     assert record["resume_id"] is None
 
 
+# --- scenario page and dashboard ----------------------------------------------------------
+
+
+def test_scenario_detail_before_any_attempt(client):
+    detail = client.get(f"/api/scenarios/{LAB}").json()
+    assert detail["scenario"]["id"] == LAB
+    assert detail["scenario"]["skills"] == ["DNS", "Log analysis"]
+    assert detail["description"].startswith("Name resolution is failing")
+    assert detail["progress"]["status"] == "not_started"
+    assert detail["attempts"] == []
+
+
+def test_scenario_detail_lists_its_attempts(client, llm, session_id):
+    llm.queue(reply("ok\n"), graded())
+    client.post(url(session_id, "commands"), json={"line": "dig example.com"})
+    client.post(url(session_id, "finish"))
+
+    detail = client.get(f"/api/scenarios/{LAB}").json()
+    assert detail["progress"]["status"] == "passed"
+    assert [a["session_id"] for a in detail["attempts"]] == [session_id]
+
+
+def test_unknown_scenario_detail_is_404(client):
+    assert client.get("/api/scenarios/nope").status_code == 404
+
+
+def test_stats_before_any_attempt(client):
+    assert client.get("/api/stats").json() == {
+        "incidents": 1,
+        "incidents_started": 0,
+        "incidents_passed": 0,
+        "attempts": 0,
+        "graded": 0,
+        "passed_attempts": 0,
+        "pass_rate": None,
+        "average_percent": None,
+        "seconds_played": 0,
+        "skills": [
+            {"skill": "DNS", "incidents": 1, "passed": 0},
+            {"skill": "Log analysis", "incidents": 1, "passed": 0},
+        ],
+    }
+
+
+def test_stats_after_a_pass_and_an_unfinished_attempt(client, llm, session_id, bootstrap):
+    llm.queue(reply("ok\n"), graded())
+    client.post(url(session_id, "commands"), json={"line": "dig example.com"})
+    client.post(url(session_id, "finish"))
+    llm.queue(bootstrap)
+    client.post("/api/sessions", json={"scenario_id": LAB})
+
+    stats = client.get("/api/stats").json()
+    assert stats["incidents_started"] == 1 and stats["incidents_passed"] == 1
+    assert stats["attempts"] == 2 and stats["graded"] == 1 and stats["passed_attempts"] == 1
+    assert stats["pass_rate"] == 100
+    assert stats["average_percent"] > 0
+    assert {s["skill"]: s["passed"] for s in stats["skills"]} == {"DNS": 1, "Log analysis": 1}
+
+
 # --- pages ------------------------------------------------------------------------
 
 
@@ -504,9 +565,13 @@ def test_progress_after_passing(client, llm, session_id):
     ("path", "marker"),
     [
         ("/", "hub.js"),
+        ("/scenarios/abc", "scenario.js"),
+        ("/progress", "progress.js"),
         ("/play/abc", "play.js"),
         ("/debrief/abc", "debrief.js"),
         ("/static/style.css", "--accent"),
+        ("/static/theme.js", "incidently-theme"),
+        ("/static/favicon.svg", "<svg"),
         ("/static/vendor/xterm/xterm.js", "Terminal"),
         ("/static/vendor/xterm/addon-fit.js", "FitAddon"),
     ],

@@ -1,7 +1,7 @@
 // Play page: the terminal, the ticket panel, hints, and submitting.
 
 import {
-  ApiError, api, ask, el, hideOverlay, sessionIdFromPath, showBusy, showError, showMode, stream,
+  ApiError, api, ask, el, hideOverlay, sessionIdFromPath, showBusy, showError, initChrome, stream,
 } from "./common.js";
 
 const sessionId = sessionIdFromPath();
@@ -333,5 +333,5 @@ async function load() {
 
 document.getElementById("hint-button").addEventListener("click", takeHint);
 document.getElementById("submit-button").addEventListener("click", confirmFinish);
-showMode();
+initChrome();
 load();

@@ -13,6 +13,7 @@ number of ``output`` and ``restart`` events, then one ``turn`` or ``error``.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Literal
 
 from pydantic import BaseModel
@@ -21,7 +22,7 @@ from ..engine import Hint, Turn
 from ..grading import Debrief
 from ..scenario import Scenario
 from ..session import Session
-from ..storage import Attempt, AttemptStatus, Progress, ProgressStatus
+from ..storage import Attempt, AttemptStatus, Progress, ProgressStatus, progress, summarize
 
 
 class ScenarioCard(BaseModel):
@@ -31,6 +32,7 @@ class ScenarioCard(BaseModel):
     topic: str
     difficulty: str
     summary: str
+    skills: list[str]
 
     @classmethod
     def of(cls, scenario: Scenario) -> ScenarioCard:
@@ -41,6 +43,7 @@ class ScenarioCard(BaseModel):
             topic=scenario.topic,
             difficulty=scenario.difficulty,
             summary=scenario.summary,
+            skills=list(scenario.skills),
         )
 
 
@@ -109,6 +112,73 @@ class AttemptView(BaseModel):
             maximum=attempt.maximum,
             percent=attempt.percent,
             grade=attempt.grade,
+        )
+
+
+class ScenarioDetailView(BaseModel):
+    """A scenario's own page: what it is, what it practises, and the player's attempts."""
+
+    scenario: ScenarioCard
+    description: str
+    progress: ProgressView
+    attempts: list[AttemptView]  # newest first
+
+    @classmethod
+    def of(cls, scenario: Scenario, attempts: list[Attempt]) -> ScenarioDetailView:
+        mine = [a for a in attempts if a.scenario_id == scenario.id]
+        return cls(
+            scenario=ScenarioCard.of(scenario),
+            description=scenario.description,
+            progress=ProgressView.of(scenario.id, progress(mine).get(scenario.id)),
+            attempts=[AttemptView.of(a) for a in mine],
+        )
+
+
+class SkillView(BaseModel):
+    skill: str
+    incidents: int  # scenarios in the catalog that practise it
+    passed: int  # of those, how many the player has passed
+
+
+class StatsView(BaseModel):
+    """Totals for the progress dashboard."""
+
+    incidents: int
+    incidents_started: int
+    incidents_passed: int
+    attempts: int
+    graded: int
+    passed_attempts: int
+    pass_rate: int | None  # percent of graded attempts that passed
+    average_percent: int | None
+    seconds_played: int
+    skills: list[SkillView]  # most widely practised first
+
+    @classmethod
+    def of(cls, scenarios: Iterable[Scenario], attempts: list[Attempt]) -> StatsView:
+        scenarios = list(scenarios)
+        records = progress(attempts)
+        passed = {sid for sid, p in records.items() if p.status == "passed"}
+        totals = summarize(attempts)
+
+        skills: dict[str, SkillView] = {}
+        for scenario in scenarios:
+            for name in scenario.skills:
+                view = skills.setdefault(name, SkillView(skill=name, incidents=0, passed=0))
+                view.incidents += 1
+                view.passed += scenario.id in passed
+
+        return cls(
+            incidents=len(scenarios),
+            incidents_started=sum(1 for s in scenarios if s.id in records),
+            incidents_passed=sum(1 for s in scenarios if s.id in passed),
+            attempts=totals.attempts,
+            graded=totals.graded,
+            passed_attempts=totals.passed,
+            pass_rate=totals.pass_rate,
+            average_percent=totals.average_percent,
+            seconds_played=totals.seconds_played,
+            skills=sorted(skills.values(), key=lambda s: (-s.incidents, s.skill.lower())),
         )
 
 
