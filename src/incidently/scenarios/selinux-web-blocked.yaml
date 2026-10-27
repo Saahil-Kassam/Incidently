@@ -1,0 +1,98 @@
+id: selinux-web-blocked
+title: SELinux Blocking the Intranet Portal
+category: Enterprise Systems
+topic: Linux security (SELinux)
+difficulty: intermediate
+summary: The intranet portal returns 403s after a routine deploy, but file permissions look fine.
+description: >
+  After this morning's routine deploy, an intranet site started refusing
+  requests, yet the files and their permissions look exactly as they should. You
+  have root on the Fedora web server. Find what is really saying no, fix it the
+  right way, and leave the host's security settings as strict as you found them.
+skills: [SELinux, Service triage, Log analysis, Hardening]
+
+randomize:
+  app: [portal, hrweb, wiki, timesheets]
+  webhost: [web01, web02, intra01]
+
+objective: >
+  Restore the {{app}} intranet site on {{webhost}} without weakening the host's
+  security posture. SELinux must remain in enforcing mode.
+
+hosts:
+  - name: "{{webhost}}"
+    os: Fedora Server 40 (SELinux enforcing, targeted policy)
+    shell: bash
+    role: Apache httpd 2.4 intranet web server with php-fpm
+    ip: 10.30.5.21
+    user: root
+    cwd: /root
+
+start_host: "{{webhost}}"
+
+root_cause_variants:
+  - >
+    The deploy script built the release in /home/deploy/releases/{{app}}-2.7.1 and
+    used `mv` (not cp) into /var/www/{{app}}. The files kept the user_home_t
+    context. httpd gets AVC denials (read on user_home_t) and serves 403. Fix:
+    restorecon -Rv /var/www/{{app}} (optionally semanage fcontext if a
+    non-default path were used). Unix permissions are fine.
+  - >
+    The new release moved the site to a custom document root /srv/{{app}} with an
+    updated Apache vhost. There's no file-context rule for /srv/{{app}}, so files
+    are var_t and httpd is denied. Fix: semanage fcontext -a -t
+    httpd_sys_content_t "/srv/{{app}}(/.*)?" then restorecon -Rv /srv/{{app}}.
+  - >
+    The release changed the vhost to Listen 8443 for a new TLS front end. Apache
+    fails to start ("could not bind to address [::]:8443 - Permission denied",
+    AVC name_bind denied) so the site is down behind the load balancer, which
+    surfaces as 503/403 to users. Fix: semanage port -a -t http_port_t -p tcp 8443,
+    then systemctl restart httpd.
+
+hidden_flag: >
+  The specific AVC denial in /var/log/audit/audit.log (ausearch -m AVC or
+  journalctl / sealert output) naming httpd and the wrong context or port.
+
+resolution_condition: >
+  Correct SELinux labels or port type are in place, httpd is running, the site
+  returns HTTP 200 locally (curl), and SELinux is still enforcing.
+
+grading:
+  - id: check_service
+    description: Check httpd status and/or the Apache error log
+    points: 10
+    required: false
+  - id: rule_out_permissions
+    description: Check ownership/permissions or labels on the content (ls -lZ / namei -l)
+    points: 10
+    required: false
+  - id: find_avc_denial
+    description: Find the AVC denial in the audit log (ausearch, audit2why, sealert, journalctl)
+    points: 25
+    required: true
+  - id: correct_fix
+    description: Fix labels or port typing with restorecon / semanage (not chmod 777, not setenforce 0)
+    points: 30
+    required: true
+  - id: verify_resolution
+    description: Verify with curl and getenforce that the site works with SELinux enforcing
+    points: 15
+    required: true
+  - id: keep_enforcing
+    description: Never disables SELinux or switches it to permissive during the incident
+    points: 10
+    required: false
+
+hints:
+  - The Apache error log says access is denied, yet the Unix permissions look correct. What else can deny a process access on Fedora?
+  - Mandatory access control denials are recorded by the audit subsystem. Search it for recent AVC messages.
+  - Look at the SELinux context (ls -Z) or port type (semanage port -l) that httpd needs versus what the new release has.
+
+simulation_notes: >
+  Fedora 40, httpd-2.4.62, policycoreutils-python-utils installed (semanage,
+  audit2why). The deploy happened at 06:40 today. Emulate authentic audit.log AVC
+  lines (type=AVC msg=audit(...): avc: denied { read } for pid=... comm="httpd" ...
+  scontext=system_u:system_r:httpd_t:s0 tcontext=...). If the trainee runs
+  setenforce 0 the site starts working but this is destructive; the grader
+  should mark it and keep_enforcing must not be awarded. chmod -R 777 does not fix
+  anything and is high risk.

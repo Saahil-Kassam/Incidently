@@ -22,14 +22,24 @@ def test_skills_are_shared_between_scenarios():
     assert sum(1 for n in counts.values() if n > 1) >= 3
 
 
-def test_networking_scenarios_are_bundled():
-    assert {s.id for s in SCENARIOS} == {
-        "dhcp-pool-exhaustion",
-        "dns-cache-poisoning",
-        "ospf-routing-loop",
-        "wifi-8021x-radius",
+def test_bundled_scenarios_by_category():
+    by_category = {}
+    for scenario in SCENARIOS:
+        by_category.setdefault(scenario.category, set()).add(scenario.id)
+    assert by_category == {
+        "Networking": {
+            "dhcp-pool-exhaustion",
+            "dns-cache-poisoning",
+            "ospf-routing-loop",
+            "wifi-8021x-radius",
+        },
+        "Enterprise Systems": {
+            "ad-sync-failure",
+            "ios-mdm-enrollment",
+            "selinux-web-blocked",
+            "sqlite-corruption",
+        },
     }
-
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.id)
 class TestBundledScenario:
