@@ -580,6 +580,16 @@ def test_pages_and_assets_are_served(client, path, marker):
     response = client.get(path)
     assert response.status_code == 200
     assert marker in response.text
+    # Pages and scripts are always checked before reuse, so an upgrade can't
+    # pair a new page with an old cached script.
+    assert response.headers["cache-control"] == "no-cache"
+
+
+def test_unchanged_static_files_revalidate_cheaply(client):
+    first = client.get("/static/common.js")
+    again = client.get("/static/common.js", headers={"If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304
+    assert again.headers["cache-control"] == "no-cache"
 
 
 def test_health_reports_mode(client):
