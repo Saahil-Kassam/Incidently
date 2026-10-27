@@ -1,6 +1,8 @@
 """Start Incidently: ``python -m incidently`` (or the ``incidently`` command).
 
 Serves the web app on http://127.0.0.1:8000 and opens it in the browser.
+``incidently validate [PATH ...]`` checks scenario files instead (see
+:mod:`incidently.validate`).
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import logging
 import sys
 import threading
 import webbrowser
+from pathlib import Path
 
 from . import __version__
 from .config import ConfigError, Settings
@@ -19,13 +22,29 @@ from .storage import Database, StorageError
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="incidently", description="Practise troubleshooting enterprise network incidents."
+        prog="incidently", description="Practise troubleshooting enterprise IT incidents."
     )
     parser.add_argument("--host", default="127.0.0.1", help="address to listen on")
     parser.add_argument("--port", type=int, default=8000, help="port to listen on")
     parser.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
     parser.add_argument("--version", action="version", version=f"incidently {__version__}")
+    commands = parser.add_subparsers(dest="command", metavar="command")
+    check = commands.add_parser(
+        "validate",
+        help="check scenario files and exit",
+        description="Check scenario files for errors and house-style problems "
+        "(see docs/writing-scenarios.md). With no paths, checks the bundled scenarios.",
+    )
+    check.add_argument(
+        "paths", nargs="*", type=Path, help="scenario files, or folders of them (*.yaml)"
+    )
+    check.add_argument("--strict", action="store_true", help="fail on warnings too")
     args = parser.parse_args(argv)
+
+    if args.command == "validate":
+        from .validate import main as validate
+
+        return validate(args.paths, strict=args.strict)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
