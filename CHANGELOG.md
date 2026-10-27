@@ -6,6 +6,22 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Prompt caching for simulated commands: the system prompt and the conversation before the
+  newest command are marked for caching, so each turn reads them from cache instead of paying
+  for them again. Messages are sent in block form so the cached prefix is byte-identical from
+  turn to turn. Setup, hints, and grading are left uncached (one-off calls).
+- Token usage per session (`Session.usage`), by kind of call (setup, command, hint, grading) and
+  by the model that served it, including cache reads and writes. Fallback models get their own
+  records.
+- Estimated cost (`incidently.pricing`): per-model prices for input, output, cache reads, and
+  5-minute cache writes; unknown models make a cost "unknown" rather than wrong.
+- API usage on the play page (updated after every command and hint), on the debrief, as an
+  estimated-cost tile on Progress, and as a cost column in the attempts table. `usage` is in the
+  session, turn, hint, debrief, attempt, and stats responses.
+- Database schema version 2: token and cost columns, added to existing files in place.
+- The log line for each model call shows cache reads and writes.
+
 ## [0.5.0] - 2026-10-26
 
 Eight incidents across Networking and Enterprise Systems, plus a scenario authoring guide and a `validate` command.
