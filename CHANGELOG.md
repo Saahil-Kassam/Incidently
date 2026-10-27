@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-26
+
+Eight incidents across Networking and Enterprise Systems, plus a scenario authoring guide and a `validate` command.
+
 ### Added
 - Four Enterprise Systems incidents, ported from NetSim: Entra Connect sync failure
   (`ad-sync-failure`), SELinux blocking an intranet site (`selinux-web-blocked`), a corrupted

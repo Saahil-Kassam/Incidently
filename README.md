@@ -7,10 +7,10 @@ Pick an incident from the hub, get a ticket, and troubleshoot simulated hosts
 output for every command and keeps the environment consistent as you change it.
 When you submit, you get a score and a debrief explaining the real root cause.
 
-> **Status:** v0.4.1: four networking incidents, played in the browser with
-> output streaming in as it is generated, graded at the end, and saved so you
-> can resume them, with search, a page per incident, a progress dashboard,
-> and light and dark themes. See the
+> **Status:** v0.5.0: eight incidents across Networking and Enterprise
+> Systems, played in the browser with output streaming in as it is generated,
+> graded at the end, and saved so you can resume them, with search, a page per
+> incident, a progress dashboard, and light and dark themes. See the
 > [roadmap](docs/roadmap.md) for what comes next.
 
 ## Requirements
