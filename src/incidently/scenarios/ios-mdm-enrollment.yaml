@@ -1,0 +1,115 @@
+id: ios-mdm-enrollment
+title: iOS Devices Failing Intune Enrollment
+category: Enterprise Systems
+topic: Mobile (Intune)
+difficulty: intermediate
+summary: Field staff can't enroll new iPhones in Intune, and existing devices stopped checking in.
+description: >
+  New iPhones for a field team won't enroll in Intune, and some existing devices
+  seem to have gone quiet too. You're on an admin workstation already connected
+  to Microsoft Graph PowerShell. Work out whether the two symptoms share a
+  cause, find the component that's failing, and fix it without creating new
+  problems for the devices that still work.
+skills: [Intune and Apple MDM, PowerShell, Configuration review, Scoping impact]
+
+randomize:
+  tenant: [contoso, fabrikam, woodgrove, adatum]
+  region: [EMEA, APAC, AMER-West, AMER-East]
+
+objective: >
+  Restore Apple device management for the {{tenant}} tenant: new iPhones for
+  the {{region}} field team must enroll, and existing iOS devices must resume
+  check-ins. Identify the cause from the admin workstation using Microsoft Graph
+  PowerShell.
+
+hosts:
+  - name: mdm-admin01
+    os: Windows 11 Enterprise 24H2
+    shell: powershell
+    role: Endpoint admin workstation with Microsoft.Graph and Microsoft.Graph.Beta PowerShell modules (already connected as the Intune admin)
+    ip: 10.8.3.57
+    user: "{{tenant}}\\mdm.admin"
+    cwd: C:\Users\mdm.admin
+
+start_host: mdm-admin01
+
+root_cause_variants:
+  - >
+    The Apple MDM Push (APNs) certificate expired 2 days ago. It was
+    renewed by creating a NEW certificate with a different Apple ID instead of
+    renewing the existing one, and the upload was never completed, so
+    applePushNotificationCertificate shows expirationDateTime in the past. All iOS
+    enrollments fail and existing devices can't be contacted. Fix: renew the
+    ORIGINAL certificate (same Apple ID, topic identifier
+    com.apple.mgmt.External.<guid>) in Apple's portal and upload it
+    (represented as the admin completing the renewal and the cert showing a new
+    expiration date), then trigger a device sync to verify.
+  - >
+    An Automated Device Enrollment (ADE / Apple Business Manager) server token
+    expired; depOnboardingSettings shows tokenExpirationDateTime in the past and
+    lastSyncErrorCode is non-zero. New corporate iPhones get no enrollment
+    profile; existing devices keep working but last check-in data is stale
+    because a sync script also fails. Fix: renew the ADE token (download new .p7m
+    from ABM and upload), sync devices from ABM, and confirm the enrollment
+    profile is assigned.
+  - >
+    An enrollment restriction (Device type restriction, priority 1) created
+    yesterday for a pilot group was mistakenly assigned to 'All users', blocking
+    iOS/iPadOS personal AND corporate enrollment. Enrollments fail with "Device
+    cannot be enrolled - enrollment restriction". (Check-ins of existing devices
+    are unaffected, and the reporter conflated two issues.) Fix: correct the
+    assignment of the restriction to the pilot group or allow iOS in it, then
+    verify with a test enrollment in the enrollment failures report.
+
+hidden_flag: >
+  Graph output that pinpoints the cause: the APNs certificate with an expired
+  expirationDateTime, the ADE token past its tokenExpirationDateTime with a sync
+  error, or the platform restriction at priority 1 assigned to All users that blocks iOS.
+
+resolution_condition: >
+  The failing component is renewed or corrected (represented by updated Graph
+  objects), and a verification step (device sync, enrollment report, test
+  enrollment) shows iOS enrollments succeeding again.
+
+grading:
+  - id: scope_impact
+    description: Scope the impact by querying managed iOS devices (last sync times) and/or enrollment failures
+    points: 15
+    required: false
+  - id: check_apple_connectors
+    description: Inspect Apple connectors - APNs certificate and ADE/DEP token status
+    points: 20
+    required: false
+  - id: check_enrollment_config
+    description: Review enrollment restrictions / enrollment configurations and their assignments
+    points: 10
+    required: false
+  - id: identify_root_cause
+    description: Identify the specific failing component with evidence
+    points: 20
+    required: true
+  - id: apply_fix
+    description: Apply the correct remediation (renew the right cert/token, fix the assignment) without creating new problems
+    points: 20
+    required: true
+  - id: verify_resolution
+    description: Verify enrollments/check-ins succeed after the fix
+    points: 15
+    required: true
+
+hints:
+  - Separate the two symptoms - new enrollments failing versus existing devices not checking in. Do both actually have the same cause?
+  - Every Apple device management flow in Intune depends on a few connectors and policies with expiration dates or assignments. List them.
+  - Get-MgDeviceManagementApplePushNotificationCertificate, Get-MgBetaDeviceManagementDepOnboardingSetting, and Get-MgDeviceManagementDeviceEnrollmentConfiguration will show what you need.
+
+simulation_notes: >
+  Tenant {{tenant}}.onmicrosoft.com, about 2,400 managed iOS devices. The admin
+  is connected with Connect-MgGraph (scopes DeviceManagementServiceConfig.ReadWrite.All,
+  DeviceManagementManagedDevices.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All).
+  Emulate Graph PowerShell output: objects formatted as property lists or tables,
+  ISO 8601 timestamps. Actions that happen in the Apple portal can't be done
+  from the shell; when the trainee demonstrates the correct renewal/upload
+  command path (e.g., Update-MgDeviceManagementApplePushNotificationCertificate
+  with the renewed cert), treat the renewal as completed. Creating a brand-new
+  APNs certificate with a different Apple ID instead of renewing is destructive:
+  every enrolled device would need re-enrollment.

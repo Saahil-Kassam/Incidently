@@ -6,6 +6,28 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-26
+
+Eight incidents across Networking and Enterprise Systems, plus a scenario authoring guide and a `validate` command.
+
+### Added
+- Four Enterprise Systems incidents, ported from NetSim: Entra Connect sync failure
+  (`ad-sync-failure`), SELinux blocking an intranet site (`selinux-web-blocked`), a corrupted
+  SQLite database behind a web app (`sqlite-corruption`), and iOS devices failing Intune
+  enrollment (`ios-mdm-enrollment`). The hub's category filter now has Networking and
+  Enterprise Systems.
+- `incidently validate [PATH ...]`: checks scenario files or folders (default: the bundled
+  ones). Errors (unparseable YAML, schema violations, an id that doesn't match its file or is
+  used twice, playthroughs that don't resolve) exit with 1; house-style warnings (points not
+  totalling 100, a single root cause, too few hints, a missing or revealing description, too
+  few or many skills) only fail with `--strict`.
+- Scenario authoring guide: `docs/writing-scenarios.md`.
+
+### Changed
+- The bundled-scenario tests use the same rules as `validate`, so authors and the test suite
+  agree on house style.
+- The project now describes itself as enterprise IT incident response, not only networking.
+
 ## [0.4.1] - 2026-10-26
 
 ### Fixed

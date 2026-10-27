@@ -1,0 +1,117 @@
+id: ad-sync-failure
+title: Entra Connect Sync Failure
+category: Enterprise Systems
+topic: Identity (Entra Connect)
+difficulty: intermediate
+summary: New hires can't sign in to Microsoft 365 - on-prem AD changes stopped syncing to the cloud.
+description: >
+  New starters can't sign in to Microsoft 365, because changes made in
+  on-premises Active Directory have stopped reaching the cloud. You're on the
+  Entra Connect server, with a domain controller a hop away. Find which step of
+  the sync is failing and why, fix it with the smallest change that works, and
+  prove a fresh sync cycle carries the new hire through.
+skills: [Active Directory and Entra ID, PowerShell, Log analysis, Configuration review]
+
+randomize:
+  domain: [contoso.local, fabrikam.corp, northwind.internal, tailspin.lan]
+  tenant: [contoso, fabrikam, northwindtraders, tailspintoys]
+  subnet: ["10.20.1", "10.40.8", "172.16.12", "192.168.50"]
+  new_hire: [j.okafor, m.lindqvist, a.ramirez, s.nakamura, p.dubois]
+
+objective: >
+  Restore directory synchronization between on-premises Active Directory
+  ({{domain}}) and Microsoft Entra ID, confirm that pending changes (including
+  new hire {{new_hire}}) reach the cloud, and leave sync healthy.
+
+hosts:
+  - name: aadc01
+    os: Windows Server 2022 Datacenter (Entra Connect Sync 2.4.x)
+    shell: powershell
+    role: Microsoft Entra Connect Sync server (ADSync service, staging mode off)
+    ip: "{{subnet}}.25"
+    user: "{{domain}}\\svc-itops"
+    cwd: C:\Users\svc-itops
+  - name: dc01
+    os: Windows Server 2022 Standard
+    shell: powershell
+    role: Domain controller, PDC emulator, DNS, authoritative NTP source for the domain
+    ip: "{{subnet}}.10"
+    user: "{{domain}}\\svc-itops"
+    cwd: C:\Users\svc-itops
+
+start_host: aadc01
+
+root_cause_variants:
+  - >
+    The AD DS connector account (MSOL_4f8e2a1c9d03) password was reset by a
+    well-meaning admin during a stale-account cleanup. Every import from the
+    {{domain}} connector fails with stopped-credentials / "The user name or password
+    is incorrect" (event 6100/6012 in Application log, run profile result
+    'stopped-extension-dll-exception' or 'stopped-credentials'). Fix: reset the
+    password in AD and update it in the connector (Synchronization Service
+    Manager or Set-ADSyncConnector credential / via the Entra Connect wizard
+    equivalent), then run a delta sync.
+  - >
+    A security hardening GPO applied last night disabled TLS 1.2 client support
+    via SCHANNEL registry keys and set .NET SchUseStrongCrypto=0 on aadc01. Export
+    to Entra ID fails with "The underlying connection was closed" / AADSTS
+    handshake errors (event 906, 6900). Fix: re-enable TLS 1.2
+    (HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client
+    Enabled=1, DisabledByDefault=0, and SchUseStrongCrypto=1 for .NET v4.0.30319
+    both 32/64-bit), restart ADSync (or reboot), run a delta sync.
+  - >
+    The Windows Time service on aadc01 is misconfigured to sync from an internal
+    VM host clock that drifted; aadc01 is 11 minutes ahead of dc01. Kerberos
+    authentication to the DC fails (KRB_AP_ERR_SKEW, event 4 / 5719), imports
+    return 'stopped-server-down'. Fix: point w32time at the domain hierarchy
+    (w32tm /config /syncfromflags:domhier /update), resync (w32tm /resync /force),
+    confirm offset, then run a delta sync.
+
+hidden_flag: >
+  Output that pinpoints the specific cause: the connector run history/event log
+  showing the credential failure for the MSOL_ account, the SCHANNEL/TLS 1.2
+  registry values set to disabled, or the w32tm offset of ~11 minutes against dc01.
+
+resolution_condition: >
+  The root cause is corrected, a sync cycle (delta or initial) has run
+  successfully after the fix, and the connector run status/export shows success
+  with {{new_hire}} provisioned to the cloud.
+
+grading:
+  - id: check_sync_status
+    description: Check sync scheduler / connector run status (Get-ADSyncScheduler, Get-ADSyncConnectorRunStatus, Get-ADSyncRunProfileResult or equivalent)
+    points: 10
+    required: false
+  - id: review_event_logs
+    description: Review Application event log or ADSync errors for the failure detail
+    points: 15
+    required: false
+  - id: identify_root_cause
+    description: Gather evidence that isolates the actual root cause (credentials, TLS config, or time skew)
+    points: 25
+    required: true
+  - id: apply_fix
+    description: Correct the root cause with an appropriate, minimal change
+    points: 25
+    required: true
+  - id: trigger_sync
+    description: Run Start-ADSyncSyncCycle (Delta or Initial) after fixing
+    points: 10
+    required: true
+  - id: verify_resolution
+    description: Verify the sync succeeded and the new hire object exported to Entra ID
+    points: 15
+    required: true
+
+hints:
+  - Start with the health of the sync engine itself - when did the last successful cycle run, and what did the run profile report?
+  - The ADSync module and the Application event log will tell you which step (import from AD, or export to Entra ID) is failing and why.
+  - Compare what the connector needs (credentials, a TLS 1.2 channel to login.microsoftonline.com, Kerberos to the DC) against what this server currently has.
+
+simulation_notes: >
+  Tenant is {{tenant}}.onmicrosoft.com. The ADSync PowerShell module is installed
+  on aadc01. Last successful sync was roughly 14 hours ago; the scheduler is
+  enabled with a 30-minute interval and keeps failing. Use authentic Entra Connect
+  cmdlet output (Get-ADSyncScheduler properties, run profile result objects) and
+  Windows event log formatting. dc01 is healthy apart from any time-related
+  symptoms. Restarting ADSync alone does not fix any variant.

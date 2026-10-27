@@ -1,0 +1,109 @@
+id: sqlite-corruption
+title: Corrupted SQLite Database Behind a Web App
+category: Enterprise Systems
+topic: Databases (SQLite)
+difficulty: advanced
+summary: The inventory web app throws HTTP 500s; its SQLite database appears to be damaged.
+description: >
+  An internal Flask app is throwing HTTP 500s and its SQLite database looks
+  damaged. You have an admin shell on the Linux host that runs it. Protect
+  what's left before you change anything, work out what damaged the database in
+  the first place, recover with as little data loss as you can, and make sure it
+  can't happen again.
+skills: [Databases, Data recovery, Service triage, Change control]
+
+randomize:
+  app: [assetdb, invtrack, loanerpool]
+  apphost: [app01, tools01, ops-web1]
+
+objective: >
+  Bring the {{app}} Flask application on {{apphost}} back online with the most
+  recent possible data, stop whatever damaged the database from doing it again,
+  and prove data integrity.
+
+hosts:
+  - name: "{{apphost}}"
+    os: Arch Linux (rolling, kernel 6.10), Python 3.12, gunicorn, SQLite 3.46
+    shell: bash
+    role: Runs the {{app}} Flask app (systemd unit {{app}}.service, user {{app}}) with data in /srv/{{app}}/data/{{app}}.db (WAL mode)
+    ip: 10.12.9.44
+    user: admin
+    cwd: /home/admin
+
+start_host: "{{apphost}}"
+
+root_cause_variants:
+  - >
+    The root filesystem hit 100% overnight (a runaway debug log at
+    /var/log/{{app}}/debug.log, 9.8G) while the app was checkpointing the WAL,
+    leaving a torn page. PRAGMA integrity_check reports "database disk image is
+    malformed" / btree page errors in the 'loans' table. Fix: free space (truncate
+    and logrotate the debug log, turn off DEBUG), stop the service, back up the
+    damaged db + wal, recover (sqlite3 .recover into a new file, or restore last
+    night's backup in /srv/backup and replay), verify integrity_check = ok, fix
+    ownership, restart.
+  - >
+    A cleanup cron job (/etc/cron.d/tmp-sweep, added last week) deletes files
+    matching '*-wal' and '*-shm' older than 1 hour under /srv. It removed
+    {{app}}.db-wal while the app held uncommitted checkpoints, corrupting the
+    main db. Fix: disable/correct the cron pattern, stop the service, recover
+    data with .recover or restore /srv/backup/{{app}}-nightly.db, verify
+    integrity_check, restart.
+  - >
+    Last night's deploy ran a migration as root, which recreated
+    {{app}}.db-wal and {{app}}.db-shm owned by root:root 0644. The app (user
+    {{app}}) can't write the WAL and throws "attempt to write a readonly database"
+    and later "database disk image is malformed" after a failed rollback on a
+    single index (idx_assets_serial). Fix: stop service, fix ownership
+    (chown {{app}}:{{app}}), REINDEX idx_assets_serial (or .recover), verify
+    integrity_check, restart, and fix the deploy script to run migrations as the
+    app user.
+
+hidden_flag: >
+  The evidence pointing at the specific cause: df showing / at 100% with the
+  runaway log, the tmp-sweep cron deleting WAL files, or root-owned -wal/-shm
+  files in /srv/{{app}}/data.
+
+resolution_condition: >
+  The cause is neutralised, the database passes PRAGMA integrity_check with "ok"
+  (with the least data loss available), file ownership is correct, the service is
+  active, and curl to http://127.0.0.1:8000/health returns 200.
+
+grading:
+  - id: triage_app
+    description: Check the service status and application logs (systemctl status, journalctl -u)
+    points: 10
+    required: false
+  - id: confirm_corruption
+    description: Confirm corruption with PRAGMA integrity_check / quick_check
+    points: 15
+    required: false
+  - id: backup_before_repair
+    description: Stop the service and back up the damaged database (including -wal/-shm) before attempting repair
+    points: 15
+    required: false
+  - id: identify_root_cause
+    description: Identify what damaged the database (disk full, cron cleanup, ownership)
+    points: 20
+    required: true
+  - id: repair_database
+    description: Recover or restore the database with minimal data loss and prevent recurrence
+    points: 25
+    required: true
+  - id: verify_resolution
+    description: Verify integrity_check returns ok, the service is active, and the health endpoint returns 200
+    points: 15
+    required: true
+
+hints:
+  - Before you touch anything, figure out what state the database is in, and make sure you can undo whatever you try next.
+  - SQLite rarely corrupts itself. Look at what happened to this host (disk, scheduled jobs, deploys) around the time errors began.
+  - The sqlite3 CLI's .recover command and the nightly backups in /srv/backup are both options. Compare how much data each would preserve.
+
+simulation_notes: >
+  Errors began at 02:17 local time. Nightly backup ran at 01:00 to
+  /srv/backup/{{app}}-nightly.db (valid). App logs are in journalctl -u {{app}}
+  and /var/log/{{app}}/. The admin user has sudo. Tables: assets (~14,200 rows),
+  loans (~3,100 rows), users (~620 rows), audit_log (~88,000 rows). Deleting the
+  database or restarting the service repeatedly without fixing the root cause is
+  destructive or ineffective. sqlite3 output must use authentic formatting.
