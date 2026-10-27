@@ -18,6 +18,11 @@ A caller that wants the reply while it is still being written passes a
 :class:`TextListener`: it receives the raw reply text as it arrives, and is
 told to start over when that text stops counting (a re-ask, or a fallback
 model taking over).
+
+A caller whose requests share a growing prefix passes ``cache=True``. The
+system prompt and every message except the last are then marked for prompt
+caching, so the next request reads them from cache instead of paying for
+them again (see :func:`_prompt`).
 """
 
 from __future__ import annotations
@@ -104,6 +109,7 @@ class LLMRequest:
     schema: type[BaseModel]
     effort: Effort
     max_tokens: int = DEFAULT_MAX_TOKENS
+    cache: bool = False
 
 
 class TextListener(Protocol):
@@ -126,6 +132,7 @@ class StructuredLLM(Protocol):
         effort: Effort,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         listener: TextListener | None = None,
+        cache: bool = False,
     ) -> LLMResult[T]: ...
 
 
@@ -150,8 +157,10 @@ class AnthropicLLM:
         effort: Effort,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         listener: TextListener | None = None,
+        cache: bool = False,
     ) -> LLMResult[T]:
         output_format = {"type": "json_schema", "schema": anthropic.transform_schema(schema)}
+        system_param, message_params = _prompt(system, messages, cache)
         usage = Usage()
         problem = "no attempts made"
 
@@ -159,21 +168,24 @@ class AnthropicLLM:
             if listener is not None and attempt > 1:
                 listener.restart()
             message, request_id = self._call(
-                system, messages, output_format, effort, max_tokens, listener
+                system_param, message_params, output_format, effort, max_tokens, listener
             )
-            usage += _usage(message)
+            reply_usage = _usage(message)
+            usage += reply_usage
             fell_back = _fell_back(message)
             log.info(
                 "llm reply schema=%s attempt=%d stop=%s model=%s fallback=%s request_id=%s "
-                "in=%d out=%d",
+                "in=%d cache_read=%d cache_write=%d out=%d",
                 schema.__name__,
                 attempt,
                 message.stop_reason,
                 message.model,
                 fell_back,
                 request_id,
-                message.usage.input_tokens,
-                message.usage.output_tokens,
+                reply_usage.input_tokens,
+                reply_usage.cache_read_input_tokens,
+                reply_usage.cache_creation_input_tokens,
+                reply_usage.output_tokens,
             )
 
             if message.stop_reason == "refusal":
@@ -206,8 +218,8 @@ class AnthropicLLM:
 
     def _call(
         self,
-        system: str,
-        messages: Sequence[BetaMessageParam],
+        system: str | list[dict[str, Any]],
+        messages: list[BetaMessageParam],
         output_format: dict[str, Any],
         effort: Effort,
         max_tokens: int,
@@ -221,7 +233,7 @@ class AnthropicLLM:
                 model=self._model,
                 max_tokens=max_tokens,
                 system=system,
-                messages=list(messages),
+                messages=messages,
                 output_config={"effort": effort, "format": output_format},
                 **self._fallback_params(),
             ) as stream:
@@ -268,6 +280,39 @@ def create_llm(settings: Settings) -> StructuredLLM:
 
         return FakeLLM(default=offline_reply)
     return AnthropicLLM(settings)
+
+
+CACHE_MARKER = {"type": "ephemeral"}  # 5-minute TTL; turns come well within it
+
+
+def _prompt(
+    system: str, messages: Sequence[BetaMessageParam], cache: bool
+) -> tuple[str | list[dict[str, Any]], list[BetaMessageParam]]:
+    """The ``system`` and ``messages`` request parameters, with cache markers if asked.
+
+    Caching is a prefix match, so the markers go where the prefix stops being
+    shared with the next request: after the system prompt, and after the
+    second-to-last message. The last message (the newest command and its
+    state snapshot) changes every turn and is left unmarked.
+
+    Every message is sent in block form, marked or not. A message's content
+    then renders the same way whether or not it carries this turn's marker,
+    so the prefix stays byte-identical from one request to the next.
+    """
+    if not cache:
+        return system, list(messages)
+    blocks = [_as_blocks(m) for m in messages]
+    if len(blocks) >= 2:
+        content = blocks[-2]["content"]
+        content[-1] = {**content[-1], "cache_control": CACHE_MARKER}
+    return [{"type": "text", "text": system, "cache_control": CACHE_MARKER}], blocks
+
+
+def _as_blocks(message: BetaMessageParam) -> BetaMessageParam:
+    content = message["content"]
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    return {**message, "content": [dict(block) for block in content]}  # type: ignore[misc]
 
 
 def _relay(stream: Any, listener: TextListener) -> None:

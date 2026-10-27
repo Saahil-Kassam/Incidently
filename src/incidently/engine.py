@@ -9,7 +9,10 @@ arrives (see :mod:`incidently.streaming`), and the final :class:`Turn` still
 carries all of it.
 
 Built-ins like ``clear`` and ``exit`` are answered locally (see
-:mod:`incidently.shell`); every other command is one model call.
+:mod:`incidently.shell`); every other command is one model call. Command
+calls use prompt caching, since each resends the same system prompt and the
+history so far. Every call that returns a reply adds its tokens to
+``session.usage``; a call that fails is not counted.
 
 :meth:`Engine.hint` writes a hint for where the player is, and
 :meth:`Engine.finish` ends the session, grades it, and returns the
@@ -105,7 +108,9 @@ class Engine:
             effort=self._settings.deep_effort,
             max_tokens=BOOTSTRAP_MAX_TOKENS,
         )
-        return Session.create(instance, result.output, started_at=started_at)
+        session = Session.create(instance, result.output, started_at=started_at)
+        session.add_usage("setup", result.model, result.usage)
+        return session
 
     def prompt(self, session: Session) -> str:
         return prompt(session.active, remote=session.remote)
@@ -158,6 +163,7 @@ class Engine:
                 schema=CommandResult,
                 effort=self._settings.turn_effort,
                 max_tokens=COMMAND_MAX_TOKENS,
+                cache=True,  # each command resends the same system prompt and history
                 listener=StdoutRelay(output) if output is not None else None,
             )
         except LLMError as exc:
@@ -168,6 +174,7 @@ class Engine:
         # Keep only the command in the conversation: the snapshot sent with it
         # is stale after this turn, and the next turn sends a fresh one.
         past = {"role": "user", "content": prompts.command_tag(session, command)}
+        session.add_usage("command", result.model, result.usage)
         session.record(command, reply, model=result.model, prompt=shown)
         session.apply(reply)
         session.messages += [past, {"role": "assistant", "content": reply.model_dump_json()}]
@@ -200,6 +207,7 @@ class Engine:
                 effort=self._settings.turn_effort,
                 max_tokens=HINT_MAX_TOKENS,
             )
+            session.add_usage("hint", result.model, result.usage)
             text = result.output.hint.strip()
         except LLMError as exc:
             log.warning("hint not written (%s): %s", type(exc).__name__, exc)
@@ -229,6 +237,7 @@ class Engine:
                 effort=self._settings.deep_effort,
                 max_tokens=ASSESSMENT_MAX_TOKENS,
             )
+            session.add_usage("grading", result.model, result.usage)
             session.assessment = result.output
         return debrief(session)
 

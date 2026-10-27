@@ -1,3 +1,4 @@
+from incidently.llm import Usage
 from incidently.replies import CommandResult, ServiceChange, StateUpdates
 from incidently.session import MAX_RECORDED_OUTPUT, Session
 
@@ -154,3 +155,34 @@ def test_end_keeps_the_first_end_time(session):
     session.ended_at = "2026-01-01T00:00:00+00:00"
     session.end()
     assert session.ended_at == "2026-01-01T00:00:00+00:00"
+
+
+# --- usage --------------------------------------------------------------------------
+
+
+def test_usage_is_summed_per_kind_and_model(session):
+    session.add_usage("command", "claude-opus-5-5", Usage(100, 10, 1000, 0))
+    session.add_usage("command", "claude-opus-5-5", Usage(50, 5, 1100, 40))
+    session.add_usage("command", "claude-opus-4-8", Usage(80, 8))  # served by a fallback
+    session.add_usage("setup", "claude-opus-5-5", Usage(2000, 900))
+
+    by_key = {(r.kind, r.model): r for r in session.usage}
+    assert by_key["command", "claude-opus-5-5"].calls == 2
+    assert by_key["command", "claude-opus-5-5"].cache_read_input_tokens == 2100
+    assert by_key["command", "claude-opus-4-8"].calls == 1
+    assert session.total_usage == Usage(2230, 923, 2100, 40)
+
+
+def test_cost_is_unknown_if_a_model_has_no_price(session):
+    session.add_usage("command", "claude-opus-5-5", Usage(1000))
+    assert session.estimated_cost() > 0
+    session.add_usage("command", "some-future-model", Usage(1000))
+    assert session.estimated_cost() is None
+
+
+def test_usage_round_trips_and_older_sessions_load_without_it(session):
+    session.add_usage("hint", "claude-opus-5-5", Usage(10, 2))
+    assert Session.model_validate_json(session.model_dump_json()) == session
+
+    saved_before_usage = session.model_dump(exclude={"usage"})
+    assert Session.model_validate(saved_before_usage).usage == []

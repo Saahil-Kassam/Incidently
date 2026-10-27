@@ -25,6 +25,7 @@ from typing import Literal
 from pydantic import ValidationError
 
 from .grading import debrief
+from .llm import Usage
 from .session import Session
 
 log = logging.getLogger(__name__)
@@ -50,11 +51,21 @@ MIGRATIONS = (
     );
     CREATE INDEX sessions_by_start ON sessions (started_at);
     """,
+    # Version 2: model usage per session. Older rows get zero tokens (their usage
+    # was never recorded) and an unknown cost.
+    """
+    ALTER TABLE sessions ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN cost_usd REAL;
+    """,
 )
 
 _SUMMARY = (
     "id, scenario_id, title, started_at, ended_at, commands, hints, "
-    "graded, total, maximum, percent, grade, passed"
+    "graded, total, maximum, percent, grade, passed, "
+    "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd"
 )
 _COLUMNS = [*_SUMMARY.split(", "), "data"]
 _UPSERT = (
@@ -88,6 +99,8 @@ class Attempt:
     percent: int | None = None
     grade: str | None = None
     passed: bool | None = None
+    usage: Usage = Usage()
+    cost_usd: float | None = None  # None: unknown (a model without a price, or not recorded)
 
     @property
     def status(self) -> AttemptStatus:
@@ -125,6 +138,9 @@ class Summary:
     passed: int  # graded attempts that passed
     seconds_played: int  # summed over submitted attempts
     average_percent: int | None  # mean score of graded attempts
+    usage: Usage = Usage()
+    cost_usd: float = 0.0  # summed over attempts with a known cost
+    cost_complete: bool = True  # False if some attempt with recorded usage has no known cost
 
     @property
     def pass_rate(self) -> int | None:
@@ -161,6 +177,7 @@ class Database:
     def save(self, session_id: str, session: Session) -> None:
         """Insert a session, or update it in place (its rowid, and so its order, stays put)."""
         score = debrief(session).score if session.assessment is not None else None
+        usage = session.total_usage
         row = (
             session_id,
             session.scenario.id,
@@ -175,6 +192,11 @@ class Database:
             score.percent if score else None,
             score.grade if score else None,
             score.passed if score else None,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+            session.estimated_cost(),
             session.model_dump_json(),
         )
         try:
@@ -250,12 +272,15 @@ def summarize(attempts: Iterable[Attempt]) -> Summary:
         passed=sum(1 for a in graded if a.passed),
         seconds_played=sum(a.duration_seconds or 0 for a in attempts),
         average_percent=round(sum(percents) / len(percents)) if percents else None,
+        usage=sum((a.usage for a in attempts), Usage()),
+        cost_usd=sum(a.cost_usd or 0.0 for a in attempts),
+        cost_complete=all(a.cost_usd is not None for a in attempts if a.usage != Usage()),
     )
 
 
 def _attempt(row: tuple) -> Attempt:
-    (session_id, scenario_id, title, started_at, ended_at, commands, hints, graded, *score) = row
-    total, maximum, percent, grade, passed = score
+    (session_id, scenario_id, title, started_at, ended_at, commands, hints, graded, *rest) = row
+    total, maximum, percent, grade, passed, *tokens, cost_usd = rest
     return Attempt(
         session_id=session_id,
         scenario_id=scenario_id,
@@ -270,4 +295,6 @@ def _attempt(row: tuple) -> Attempt:
         percent=percent,
         grade=grade,
         passed=None if passed is None else bool(passed),
+        usage=Usage(*tokens),
+        cost_usd=cost_usd,
     )

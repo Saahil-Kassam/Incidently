@@ -287,6 +287,89 @@ def test_unrelated_type_errors_are_not_hidden():
         generate(llm)
 
 
+# --- prompt caching ----------------------------------------------------------
+
+MARKER = {"type": "ephemeral"}
+REPLY_JSON = '{"stdout": "", "exit_code": 0}'
+
+
+def history(turns):
+    """A command conversation: ``turns`` past exchanges, then the newest command."""
+    messages = []
+    for i in range(turns):
+        messages += [
+            {"role": "user", "content": f"<command>cmd {i}</command>"},
+            {"role": "assistant", "content": f'{{"stdout": "out {i}"}}'},
+        ]
+    return [*messages, {"role": "user", "content": "<session_state>{}</session_state> newest"}]
+
+
+def without_markers(messages):
+    return [
+        {
+            **m,
+            "content": [{k: v for k, v in b.items() if k != "cache_control"} for b in m["content"]],
+        }
+        for m in messages
+    ]
+
+
+def test_without_cache_the_request_is_unchanged():
+    llm, client = make_llm(message(REPLY_JSON))
+    generate(llm, messages=history(1))
+    call = client.calls[0]
+    assert call["system"] == "You simulate a Linux host."
+    assert call["messages"] == history(1)
+
+
+def test_cache_marks_the_system_prompt_and_the_shared_history():
+    llm, client = make_llm(message(REPLY_JSON))
+    generate(llm, messages=history(2), cache=True)
+    call = client.calls[0]
+
+    assert call["system"] == [
+        {"type": "text", "text": "You simulate a Linux host.", "cache_control": MARKER}
+    ]
+    messages = call["messages"]
+    assert all(isinstance(m["content"], list) for m in messages)
+    marked = [i for i, m in enumerate(messages) for b in m["content"] if "cache_control" in b]
+    # Only the last message before the newest command; the newest changes every turn.
+    assert marked == [len(messages) - 2]
+
+
+def test_a_single_message_caches_only_the_system_prompt():
+    llm, client = make_llm(message(REPLY_JSON))
+    generate(llm, messages=history(0), cache=True)
+    call = client.calls[0]
+    assert "cache_control" in call["system"][0]
+    assert all("cache_control" not in b for m in call["messages"] for b in m["content"])
+
+
+def test_cached_prefix_is_byte_identical_from_turn_to_turn():
+    llm, client = make_llm(message(REPLY_JSON), message(REPLY_JSON))
+    generate(llm, messages=history(2), cache=True)
+    generate(llm, messages=history(3), cache=True)
+    first, second = (without_markers(c["messages"]) for c in client.calls)
+    # Everything the first request marked for caching reappears unchanged in the second.
+    assert second[: len(first) - 1] == first[:-1]
+    assert client.calls[0]["system"] == client.calls[1]["system"]
+
+
+def test_caching_does_not_change_the_callers_messages():
+    messages = history(1)
+    llm, _ = make_llm(message(REPLY_JSON))
+    generate(llm, messages=messages, cache=True)
+    assert messages == history(1)
+
+
+def test_cache_usage_is_reported_per_call():
+    reply = message(REPLY_JSON)
+    reply.usage.cache_read_input_tokens = 1200
+    reply.usage.cache_creation_input_tokens = 300
+    llm, _ = make_llm(reply)
+    assert generate(llm, cache=True).usage == Usage(100, 20, 1200, 300)
+
+
 # --- streaming to a listener -------------------------------------------------
 
 

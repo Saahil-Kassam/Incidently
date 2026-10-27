@@ -43,10 +43,18 @@ class FakeLLM:
         self,
         *replies: Reply,
         default: Callable[[LLMRequest], BaseModel] | None = None,
+        usage: Usage | None = None,
+        model: str = FAKE_MODEL,
     ) -> None:
-        """``default`` answers any request once the queued replies run out."""
+        """``default`` answers any request once the queued replies run out.
+
+        ``usage`` and ``model`` are reported on every result (default: no
+        tokens, from "fake-llm"), so tests can follow usage and cost.
+        """
         self._replies: deque[Reply] = deque(replies)
         self._default = default
+        self._usage = usage or Usage()
+        self._model = model
         self.requests: list[LLMRequest] = []
 
     def queue(self, *replies: Reply) -> None:
@@ -66,8 +74,9 @@ class FakeLLM:
         effort: Effort,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         listener: TextListener | None = None,
+        cache: bool = False,
     ) -> LLMResult[T]:
-        request = LLMRequest(system, list(messages), schema, effort, max_tokens)
+        request = LLMRequest(system, list(messages), schema, effort, max_tokens, cache)
         self.requests.append(request)
 
         if self._replies:
@@ -90,7 +99,7 @@ class FakeLLM:
                 listener.write(text[i : i + STREAM_CHUNK])
         return LLMResult(
             output=output,
-            usage=Usage(),
-            model=FAKE_MODEL,
+            usage=self._usage,
+            model=self._model,
             request_id=f"fake-{len(self.requests)}",
         )
