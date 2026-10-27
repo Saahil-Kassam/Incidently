@@ -94,6 +94,7 @@ tenacity, python-dotenv, FastAPI + uvicorn, SQLAlchemy + SQLite, plain HTML/ES m
 ### Milestone 9 — Enterprise Systems scenarios (`v0.5.0`)
 - **Port remaining 4 NetSim scenarios** (AD sync, SELinux, SQLite corruption, iOS MDM) under an "Enterprise Systems" category, filterable in the hub.
 - **Scenario authoring guide**: `docs/writing-scenarios.md` + a `validate` CLI command.
+- *As built:* the four scenarios keep NetSim's blueprint content unchanged; only the header was adapted (category "Enterprise Systems", plus a topic, a spoiler-free description, and skills from the shared vocabulary), the same treatment the networking ports had. `validate` separates errors (the app would refuse the file) from house-style warnings, and its rules live in `incidently/validate.py`, which the bundled-scenario tests now call instead of keeping their own copy.
 
 ### Milestone 10 — Cost visibility & efficiency (`v0.6.0`)
 - **Prompt caching**: fixed per-session system prompt; append-only history trimmed in chunks.

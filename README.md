@@ -1,6 +1,6 @@
 # Incidently
 
-A local hub for practising enterprise networking incident response.
+A local hub for practising enterprise IT incident response, from networks to systems.
 
 Pick an incident from the hub, get a ticket, and troubleshoot simulated hosts
 (Linux, Cisco IOS, PowerShell) in a browser terminal. Claude generates realistic
@@ -110,6 +110,7 @@ src/incidently/             application package
   streaming.py              decodes a command's stdout while the reply streams in
   grading.py                scoring rules and the debrief
   storage.py                saved sessions (SQLite), history and progress
+  validate.py               `incidently validate`: scenario errors and house-style warnings
   __main__.py               `python -m incidently`: starts the server
   web/app.py                FastAPI app: JSON API, streamed commands, pages, request checks
   web/views.py              the only shapes the browser receives
@@ -117,17 +118,21 @@ src/incidently/             application package
   web/static/vendor/xterm/  xterm.js 5.5.0 + fit addon, vendored (MIT)
   scenarios/*.yaml          bundled incident scenarios
 tests/                      pytest suite (never calls the real API)
-docs/                       roadmap and design notes
+docs/                       roadmap and the scenario authoring guide
 ```
 
 ## Scenarios
 
-| id | Topic | Level |
-|---|---|---|
-| `dhcp-pool-exhaustion` | DHCP | beginner |
-| `wifi-8021x-radius` | Wireless (802.1X) | beginner |
-| `dns-cache-poisoning` | DNS | intermediate |
-| `ospf-routing-loop` | Routing | advanced |
+| id | Category | Topic | Level |
+|---|---|---|---|
+| `dhcp-pool-exhaustion` | Networking | DHCP | beginner |
+| `wifi-8021x-radius` | Networking | Wireless (802.1X) | beginner |
+| `dns-cache-poisoning` | Networking | DNS | intermediate |
+| `ospf-routing-loop` | Networking | Routing | advanced |
+| `ad-sync-failure` | Enterprise Systems | Identity (Entra Connect) | intermediate |
+| `selinux-web-blocked` | Enterprise Systems | Linux security (SELinux) | intermediate |
+| `ios-mdm-enrollment` | Enterprise Systems | Mobile (Intune) | intermediate |
+| `sqlite-corruption` | Enterprise Systems | Databases (SQLite) | advanced |
 
 Each scenario is a YAML file named after its `id`. Every file is validated
 when the catalog loads, and an invalid one stops the app with an error naming
@@ -135,6 +140,17 @@ the file. Each playthrough is randomised from a single seed: `{{placeholders}}`
 such as site names and subnets are filled in, and one of several hidden root
 causes is chosen, so the same ticket can have a different cause each time.
 The same seed always reproduces the same playthrough.
+
+To write your own, see [Writing scenarios](docs/writing-scenarios.md). Check a
+file (or a folder of them) before adding it:
+
+```powershell
+python -m incidently validate path/to/my-scenario.yaml
+python -m incidently validate --strict    # the bundled scenarios, failing on warnings
+```
+
+Errors (the app would refuse the file) exit with 1; house-style warnings, such
+as grading points not totalling 100, only fail with `--strict`.
 
 ## Configuration
 
