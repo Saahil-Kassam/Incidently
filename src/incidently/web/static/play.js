@@ -2,6 +2,7 @@
 
 import {
   ApiError, api, ask, el, hideOverlay, sessionIdFromPath, showBusy, showError, initChrome, stream,
+  usageSummary,
 } from "./common.js";
 
 const sessionId = sessionIdFromPath();
@@ -175,6 +176,7 @@ async function submitLine() {
   streamed = "";
   try {
     const turn = await runCommand(command);
+    renderUsage(turn.usage);
     if (turn.clear_screen) term.clear();
     if (!turn.ok) {
       // The streamed output doesn't count; the notice below says why.
@@ -223,6 +225,15 @@ function renderPanel(session) {
     ),
   ));
   renderHints(session.hints, session.hints_total);
+  renderUsage(session.usage);
+}
+
+function renderUsage(usage) {
+  const line = document.getElementById("usage");
+  line.textContent = usageSummary(usage);
+  line.title = usage.total_tokens
+    ? `Input ${usage.input_tokens}, from cache ${usage.cache_read_tokens}, written to cache ${usage.cache_write_tokens}, output ${usage.output_tokens}. Cost is an estimate.`
+    : "";
 }
 
 function renderHints(hints, total) {
@@ -249,6 +260,7 @@ async function takeHint() {
   try {
     const hint = await api(`/api/sessions/${encodeURIComponent(sessionId)}/hint`, { method: "POST" });
     hints.push(hint.text);
+    renderUsage(hint.usage);
   } catch (error) {
     await showError("Couldn't get a hint", error);
   }

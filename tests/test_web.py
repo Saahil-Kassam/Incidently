@@ -10,7 +10,13 @@ from incidently.catalog import Catalog
 from incidently.config import Settings
 from incidently.engine import Engine
 from incidently.fake_llm import FakeLLM
-from incidently.llm import LLMConfigError, LLMRefusalError, LLMResponseError, LLMUnavailableError
+from incidently.llm import (
+    LLMConfigError,
+    LLMRefusalError,
+    LLMResponseError,
+    LLMUnavailableError,
+    Usage,
+)
 from incidently.offline import offline_reply
 from incidently.replies import (
     Assessment,
@@ -23,6 +29,15 @@ from incidently.storage import Database, StorageError
 from incidently.web.app import create_app
 
 LAB = "lab-outage"
+NO_USAGE = {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "total_tokens": 0,
+    "cached_percent": None,
+    "cost_usd": 0.0,
+}
 
 
 def reply(stdout="", **updates):
@@ -185,6 +200,7 @@ def test_unknown_session_is_404(client):
 def test_command_round_trip_and_transcript(client, llm, session_id):
     llm.queue(reply("10.0.0.10\n", connect_to_host="core-rtr1"))
     turn = client.post(url(session_id, "commands"), json={"line": "ssh core-rtr1"}).json()
+    assert turn.pop("usage") == NO_USAGE  # the fake model reports no tokens
     assert turn == {
         "prompt": "core-rtr1#",
         "stdout": "10.0.0.10\n",
@@ -282,7 +298,9 @@ def test_cross_origin_streamed_commands_are_refused(client, session_id):
 
 def test_hint_then_none_left(client, llm, session_id):
     llm.queue(HintReply(hint="Look at the forwarders."))
-    assert client.post(url(session_id, "hint")).json() == {
+    hint = client.post(url(session_id, "hint")).json()
+    assert hint.pop("usage") == NO_USAGE
+    assert hint == {
         "number": 1,
         "total": 1,
         "text": "Look at the forwarders.",
@@ -536,6 +554,8 @@ def test_stats_before_any_attempt(client):
         "pass_rate": None,
         "average_percent": None,
         "seconds_played": 0,
+        "usage": NO_USAGE,
+        "cost_complete": True,
         "skills": [
             {"skill": "DNS", "incidents": 1, "passed": 0},
             {"skill": "Log analysis", "incidents": 1, "passed": 0},
@@ -625,3 +645,38 @@ def test_cli_reports_bad_configuration(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv("INCIDENTLY_TURN_EFFORT", "extreme")
     assert cli.main(["--no-browser"]) == 2
     assert "INCIDENTLY_TURN_EFFORT" in capsys.readouterr().err
+
+
+# --- usage ------------------------------------------------------------------------------
+
+
+def test_usage_and_cost_reach_every_view(catalog, bootstrap, database):
+
+    per_call = Usage(1000, 200, 3000, 100)
+    llm = FakeLLM(bootstrap, usage=per_call, model="claude-opus-5-5")
+    client = make_client(llm, catalog, database)
+    sid = client.post("/api/sessions", json={"scenario_id": LAB}).json()["id"]
+
+    after_setup = client.get(url(sid)).json()["usage"]
+    assert after_setup["total_tokens"] == 4300
+    assert after_setup["cached_percent"] == 73  # 3000 of 4100 input tokens
+    assert after_setup["cost_usd"] == pytest.approx(
+        (1000 * 4 + 200 * 20 + 3000 * 0.2 + 100 * 5) / 1_000_000
+    )
+
+    llm.queue(reply("ok\n"))
+    turn = stream(client, sid, "dig example.com")[-1]["turn"]
+    assert turn["usage"]["total_tokens"] == 8600
+
+    llm.queue(HintReply(hint="h"))
+    assert client.post(url(sid, "hint")).json()["usage"]["total_tokens"] == 12900
+
+    llm.queue(graded())
+    debrief = client.post(url(sid, "finish")).json()
+    assert debrief["usage"]["total_tokens"] == 17200
+
+    (attempt,) = client.get("/api/history").json()
+    assert attempt["usage"] == debrief["usage"]
+    stats = client.get("/api/stats").json()
+    assert stats["usage"]["cost_usd"] == pytest.approx(debrief["usage"]["cost_usd"])
+    assert stats["cost_complete"] is True
