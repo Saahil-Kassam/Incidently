@@ -12,6 +12,7 @@ from incidently.storage import (
     MIGRATIONS,
     Attempt,
     Database,
+    GenerationTotals,
     StorageError,
     Summary,
     progress,
@@ -347,4 +348,23 @@ def test_a_version_1_file_is_upgraded_in_place(tmp_path, session):
     assert attempt.usage == Usage() and attempt.cost_usd is None  # never recorded
     assert summarize([attempt]).cost_complete  # nothing recorded, so nothing missing
     assert db.load("old").usage == []
+    db.close()
+
+
+def test_generations_are_recorded_and_totalled(tmp_path):
+    db = Database(tmp_path / "s.db")
+    assert db.generation_totals() == GenerationTotals()
+
+    db.record_generation("BGP flap", "bgp-flap", [("claude-opus-5-5", Usage(1000, 4000))])
+    db.record_generation("VLANs", None, [("claude-opus-5-5", Usage(500, 100, 200, 300))])
+
+    totals = db.generation_totals()
+    assert totals.generations == 2
+    assert totals.usage == Usage(1500, 4100, 200, 300)
+    expected = (1500 * 4 + 4100 * 20 + 200 * 0.2 + 300 * 5) / 1_000_000
+    assert totals.cost_usd == pytest.approx(expected)
+    assert totals.cost_complete
+
+    db.record_generation("x", None, [("mystery-model", Usage(10, 10))])
+    assert not db.generation_totals().cost_complete
     db.close()
