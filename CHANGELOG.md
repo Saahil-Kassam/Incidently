@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-02
+
+Cheaper commands through prompt caching, and API usage with an estimated cost for every session.
+
 ### Added
 - Prompt caching for simulated commands: the system prompt and the conversation before the
   newest command are marked for caching, so each turn reads them from cache instead of paying
