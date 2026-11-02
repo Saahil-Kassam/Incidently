@@ -6,6 +6,27 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- New incidents from a theme: **New incident** on the hub asks for a theme and a difficulty,
+  and Claude writes the hosts, root causes, grading, and hints. Each draft is checked with the
+  `validate` rules and revised up to twice if anything fails; a description that gives the cause
+  away is always rejected. The result joins the hub under a new **Custom** category
+  (`incidently.authoring`; `POST /api/scenarios`).
+- Custom incidents are saved as YAML in the data folder (`scenarios/`, or `scenarios-offline/`
+  in offline mode), so they survive restarts and can be edited and validated. A broken one is
+  skipped with a warning instead of stopping the app.
+- Custom incidents can be deleted from their page (`DELETE /api/scenarios/{id}`); attempts at
+  them stay in the history.
+- The tokens and estimated cost of writing incidents, failed attempts included, are saved
+  (database schema version 3) and counted in the Progress cost total. The new incident's page
+  shows what writing it cost.
+- Offline mode writes a placeholder incident named after the theme.
+
+### Fixed
+- A connection to the API that dropped while a reply was streaming in surfaced as an
+  unexplained server error; it is now reported as the API being unavailable, like other
+  network failures, so the action can be retried.
+
 ## [0.6.0] - 2026-11-02
 
 Cheaper commands through prompt caching, and API usage with an estimated cost for every session.
