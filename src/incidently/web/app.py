@@ -12,6 +12,11 @@ each, so a second command sent while one is still being simulated gets
 HTTP 409 instead of corrupting the state. The hub reads the history and
 per-scenario progress from the same database.
 
+``POST /api/scenarios`` writes a new custom scenario from a theme (see
+:mod:`incidently.authoring`), one at a time, and ``DELETE`` removes a
+custom one. Generation takes a minute or two, so it runs on a worker thread
+like any other blocking request.
+
 Commands can be streamed: ``POST .../commands/stream`` answers with
 newline-delimited JSON events (see :mod:`incidently.web.views`) so the
 terminal shows output as the model writes it. The command runs on its own
@@ -41,15 +46,17 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import __version__
+from ..authoring import MAX_THEME_LENGTH, AuthoringError, Call, generate
 from ..catalog import Catalog, ScenarioError, instantiate
 from ..config import Settings
 from ..engine import Engine
 from ..grading import debrief
 from ..llm import LLMConfigError, LLMError, LLMRefusalError, LLMUnavailableError, StructuredLLM
+from ..scenario import Difficulty
 from ..session import Session
 from ..shell import MAX_COMMAND_LENGTH
 from ..storage import Database, StorageError, progress
@@ -57,6 +64,7 @@ from .views import (
     AttemptView,
     DebriefView,
     ErrorEvent,
+    GeneratedView,
     HintView,
     OutputEvent,
     ProgressView,
@@ -82,6 +90,13 @@ _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 class NewSession(BaseModel):
     scenario_id: str
     seed: int | None = Field(default=None, ge=0, lt=2**32)
+
+
+class NewScenario(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    theme: str = Field(min_length=1, max_length=MAX_THEME_LENGTH)
+    difficulty: Difficulty = "intermediate"
 
 
 class CommandIn(BaseModel):
@@ -216,9 +231,10 @@ def create_app(
     allowed_hosts: list[str] | None = None,
 ) -> FastAPI:
     """Build the app. ``database`` defaults to the file named by the settings."""
-    catalog = catalog or Catalog.load()
+    catalog = catalog or Catalog.load(custom_dir=settings.custom_scenarios_dir)
     engine = Engine(llm, settings)
     store = SessionStore(database or Database(settings.database_path))
+    generating = threading.Lock()  # one scenario at a time: each costs a minute and money
 
     app = FastAPI(title="Incidently", version=__version__, docs_url=None, redoc_url=None)
     app.state.store = store
@@ -244,7 +260,39 @@ def create_app(
 
     @app.get("/api/scenarios")
     def list_scenarios() -> list[ScenarioCard]:
-        return [ScenarioCard.of(s) for s in catalog]
+        return [ScenarioCard.of(s, custom=catalog.is_custom(s.id)) for s in catalog]
+
+    @app.post("/api/scenarios", status_code=201)
+    def new_scenario(body: NewScenario) -> GeneratedView:
+        if not generating.acquire(blocking=False):
+            raise HTTPException(409, "Already writing an incident. Wait for it to finish.")
+        calls: list[Call] = []
+        scenario_id = None
+        try:
+            result = generate(
+                llm, settings, catalog, theme=body.theme, difficulty=body.difficulty, calls=calls
+            )
+            catalog.add_custom(result.scenario)
+            scenario_id = result.scenario.id
+            return GeneratedView.of(result)
+        except LLMError as exc:
+            log.warning("scenario generation failed: %s", exc)
+            raise _llm_failure(exc) from exc
+        except AuthoringError as exc:
+            log.warning("scenario generation failed: %s", exc)
+            raise HTTPException(
+                502, "The model couldn't write a usable incident. Try again or reword the theme."
+            ) from exc
+        except ScenarioError as exc:
+            log.error("couldn't save a generated scenario: %s", exc)
+            raise HTTPException(500, f"Couldn't save the new incident: {exc}") from exc
+        finally:
+            generating.release()
+            if calls:
+                try:
+                    store.database.record_generation(body.theme, scenario_id, calls)
+                except StorageError as exc:  # the scenario itself is saved; don't lose it
+                    log.error("couldn't record generation usage: %s", exc)
 
     @app.get("/api/scenarios/{scenario_id}")
     def scenario_detail(scenario_id: str) -> ScenarioDetailView:
@@ -252,11 +300,25 @@ def create_app(
             scenario = catalog.get(scenario_id)
         except ScenarioError:
             raise HTTPException(404, f"Unknown scenario {scenario_id!r}.") from None
-        return ScenarioDetailView.of(scenario, store.database.attempts())
+        return ScenarioDetailView.of(
+            scenario, store.database.attempts(), custom=catalog.is_custom(scenario_id)
+        )
+
+    @app.delete("/api/scenarios/{scenario_id}", status_code=204)
+    def delete_scenario(scenario_id: str) -> Response:
+        if scenario_id not in catalog:
+            raise HTTPException(404, f"Unknown scenario {scenario_id!r}.")
+        if not catalog.is_custom(scenario_id):
+            raise HTTPException(409, "Only custom incidents can be deleted.")
+        try:
+            catalog.remove_custom(scenario_id)
+        except ScenarioError as exc:
+            raise HTTPException(500, f"Couldn't delete the incident: {exc}") from exc
+        return Response(status_code=204)
 
     @app.get("/api/stats")
     def stats() -> StatsView:
-        return StatsView.of(catalog, store.database.attempts())
+        return StatsView.of(catalog, store.database.attempts(), store.database.generation_totals())
 
     @app.get("/api/progress")
     def scenario_progress() -> list[ProgressView]:

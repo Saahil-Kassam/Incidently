@@ -362,6 +362,37 @@ export function ask(title, message, buttons, { origin } = {}) {
   });
 }
 
+// A dialog that is a form: resolve true when it's submitted (the primary button, or Enter in a
+// field), false when it's cancelled or dismissed with Escape. The caller reads the fields it built.
+export function askForm(title, body, submitLabel, { origin } = {}) {
+  return new Promise((resolve) => {
+    const choose = (submitted) => {
+      hideOverlay();
+      resolve(submitted);
+    };
+    const box = el("form", {
+      class: "dialog",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": title,
+      onsubmit: (event) => {
+        event.preventDefault();
+        choose(true);
+      },
+    },
+      el("h2", {}, title),
+      ...[].concat(body).filter(Boolean).map((m) => (m instanceof Node ? m : el("p", {}, m))),
+      el("div", { class: "buttons" },
+        el("button", { type: "button", onclick: () => choose(false) }, "Cancel"),
+        el("button", { type: "submit", class: "primary" }, submitLabel),
+      ),
+    );
+    open(box, origin);
+    dismiss = () => choose(false);
+    box.querySelector("input, textarea, select")?.focus();
+  });
+}
+
 export function showError(title, error, buttons = [{ label: "OK" }]) {
   return ask(title, el("p", { class: "error" }, error.message || String(error)), buttons);
 }
@@ -374,7 +405,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     dismiss();
   } else if (event.key === "Tab") {
-    const focusable = [...layer.querySelectorAll("button, a[href], input")];
+    const focusable = [...layer.querySelectorAll("button, a[href], input, select, textarea")];
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];

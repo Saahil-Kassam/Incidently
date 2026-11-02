@@ -1,7 +1,9 @@
 // Scenario hub: every incident with your progress, narrowed by search and filters.
 // Filters live in the URL, so a filtered view survives a reload and the back button.
 
-import { api, el, errorState, initChrome, plural } from "./common.js";
+import {
+  api, askForm, el, errorState, hideOverlay, initChrome, plural, showBusy, showError,
+} from "./common.js";
 
 const grid = document.getElementById("scenarios");
 const search = document.getElementById("search");
@@ -156,6 +158,63 @@ search.addEventListener("keydown", (event) => {
     search.blur();
   }
 });
+
+// --- new incident ------------------------------------------------------------------------------
+// Claude writes a scenario from a theme. It takes a minute or two, so the busy state says so; the
+// scenario page shows what it cost once it opens.
+
+const draft = { theme: "", difficulty: "intermediate" };
+
+async function newIncident(origin) {
+  const theme = el("input", {
+    type: "text",
+    name: "theme",
+    value: draft.theme,
+    maxlength: "200",
+    required: true,
+    autocomplete: "off",
+    placeholder: "e.g. BGP flap, VLAN mismatch, expired certificate",
+  });
+  const chips = DIFFICULTY_ORDER.map((d) => el("button", {
+    type: "button",
+    class: "chip",
+    "aria-pressed": String(draft.difficulty === d),
+    onclick: (event) => {
+      draft.difficulty = d;
+      for (const chip of chips) chip.setAttribute("aria-pressed", String(chip === event.currentTarget));
+    },
+  }, d[0].toUpperCase() + d.slice(1)));
+
+  const submitted = await askForm("New incident", [
+    "Describe an incident you want to practise. Claude writes the hosts, the hidden root causes, " +
+      "and the grading, and adds it to your hub under Custom. It takes a minute or two and uses " +
+      "API credits.",
+    el("label", { class: "field" }, el("span", {}, "Theme"), theme),
+    el("div", { class: "field" },
+      el("span", { id: "difficulty-label" }, "Difficulty"),
+      el("div", { class: "chips", role: "group", "aria-labelledby": "difficulty-label" }, chips),
+    ),
+  ], "Write incident", { origin });
+  draft.theme = theme.value.trim();
+  if (!submitted || !draft.theme) return;
+
+  showBusy("Writing your incident…",
+    `Designing the hosts, root causes, and grading for “${draft.theme}”. This usually takes one to two minutes.`,
+    origin);
+  try {
+    const result = await api("/api/scenarios", { method: "POST", body: draft });
+    sessionStorage.setItem("incidently-written", JSON.stringify({ id: result.scenario.id, usage: result.usage }));
+    draft.theme = "";
+    location.assign(`/scenarios/${encodeURIComponent(result.scenario.id)}`);
+  } catch (error) {
+    hideOverlay();
+    const choice = await showError("Couldn't write the incident", error,
+      [{ label: "Close" }, { label: "Try again", class: "primary" }]);
+    if (choice === "Try again") newIncident(origin);
+  }
+}
+
+document.getElementById("new-incident").addEventListener("click", (event) => newIncident(event.currentTarget));
 
 // --- start -------------------------------------------------------------------------------------
 
