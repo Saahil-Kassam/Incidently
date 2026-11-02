@@ -1,6 +1,6 @@
-"""The local web app: a JSON API over the engine, plus five static pages.
+"""The local web app: a JSON API over the engine, plus six static pages.
 
-Pages: ``/`` (scenario hub), ``/scenarios/<id>`` (one scenario and your
+Pages: ``/setup`` (the API key), ``/`` (scenario hub), ``/scenarios/<id>`` (one scenario and your
 attempts), ``/progress`` (dashboard and history), ``/play/<session>``
 (terminal), and ``/debrief/<session>`` (results). They are plain HTML and
 ES modules, with xterm.js vendored under ``static/vendor``, so nothing
@@ -23,6 +23,11 @@ terminal shows output as the model writes it. The command runs on its own
 thread and finishes even if the browser goes away, so its result is always
 recorded in the session.
 
+Nothing but the API key page works until there is an Anthropic API key: pages
+redirect to ``/setup`` and API calls get HTTP 401 (see
+:mod:`incidently.credentials`). A key entered there is checked with Anthropic
+before it is used, and the browser only ever sees its last four characters.
+
 The app is meant for the machine it runs on. Requests must name a local host
 (guarding against DNS rebinding), and state-changing requests from another
 origin are refused (guarding against cross-site requests from other tabs),
@@ -32,19 +37,26 @@ because every command spends the user's API credits.
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import secrets
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -53,9 +65,17 @@ from .. import __version__
 from ..authoring import MAX_THEME_LENGTH, AuthoringError, Call, generate
 from ..catalog import Catalog, ScenarioError, instantiate
 from ..config import Settings
+from ..credentials import MAX_KEY_LENGTH, ApiKeys, CredentialsError
 from ..engine import Engine
 from ..grading import debrief
-from ..llm import LLMConfigError, LLMError, LLMRefusalError, LLMUnavailableError, StructuredLLM
+from ..llm import (
+    LLMConfigError,
+    LLMError,
+    LLMRefusalError,
+    LLMUnavailableError,
+    StructuredLLM,
+    check_api_key,
+)
 from ..scenario import Difficulty
 from ..session import Session
 from ..shell import MAX_COMMAND_LENGTH
@@ -66,6 +86,7 @@ from .views import (
     ErrorEvent,
     GeneratedView,
     HintView,
+    KeyStatusView,
     OutputEvent,
     ProgressView,
     RestartEvent,
@@ -82,6 +103,8 @@ log = logging.getLogger(__name__)
 STATIC_DIR = Path(str(resources.files("incidently.web") / "static"))
 LOCAL_HOSTS = ["127.0.0.1", "localhost", "[::1]"]
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# Reachable before an API key is set: the key page, its API, and what it needs to render.
+_OPEN_PATHS = frozenset({"/setup", "/api/key", "/api/health"})
 
 
 # --- requests -------------------------------------------------------------------
@@ -97,6 +120,13 @@ class NewScenario(BaseModel):
 
     theme: str = Field(min_length=1, max_length=MAX_THEME_LENGTH)
     difficulty: Difficulty = "intermediate"
+
+
+class KeyIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    api_key: str = Field(min_length=1, max_length=MAX_KEY_LENGTH)
+    remember: bool = True
 
 
 class CommandIn(BaseModel):
@@ -229,15 +259,31 @@ def create_app(
     catalog: Catalog | None = None,
     database: Database | None = None,
     allowed_hosts: list[str] | None = None,
+    keys: ApiKeys | None = None,
+    check_key: Callable[[str], None] | None = None,
 ) -> FastAPI:
-    """Build the app. ``database`` defaults to the file named by the settings."""
+    """Build the app. ``database`` defaults to the file named by the settings.
+
+    ``keys`` defaults to the key saved in the data folder or set in the
+    environment, applied to ``llm`` when it can take one. ``check_key``
+    (default: ask Anthropic) raises an :class:`LLMError` for a key that
+    doesn't work.
+    """
     catalog = catalog or Catalog.load(custom_dir=settings.custom_scenarios_dir)
+    keys = keys or ApiKeys(
+        path=settings.api_key_path,
+        environ_key=os.environ.get("ANTHROPIC_API_KEY"),
+        apply=getattr(llm, "use_api_key", lambda key: None),
+        offline=settings.fake_llm,
+    )
+    check_key = check_key or (lambda key: check_api_key(settings, key))
     engine = Engine(llm, settings)
     store = SessionStore(database or Database(settings.database_path))
     generating = threading.Lock()  # one scenario at a time: each costs a minute and money
 
     app = FastAPI(title="Incidently", version=__version__, docs_url=None, redoc_url=None)
     app.state.store = store
+    app.state.keys = keys
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
 
     @app.exception_handler(StorageError)
@@ -256,7 +302,45 @@ def create_app(
             return JSONResponse({"detail": "Cross-origin request refused."}, status_code=403)
         return await call_next(request)
 
+    @app.middleware("http")
+    async def key_required(request: Request, call_next):
+        path = request.url.path
+        if keys.configured or path in _OPEN_PATHS or path.startswith("/static/"):
+            return await call_next(request)
+        if path.startswith("/api/"):
+            return JSONResponse({"detail": "Add your Anthropic API key first."}, status_code=401)
+        return RedirectResponse(f"/setup?next={quote(path)}", status_code=303)
+
     # --- API ---
+
+    @app.get("/api/key")
+    def key_status() -> KeyStatusView:
+        return KeyStatusView.of(keys.status())
+
+    @app.post("/api/key")
+    def set_key(body: KeyIn) -> KeyStatusView:
+        if settings.fake_llm:
+            raise HTTPException(409, "Offline mode doesn't use an API key.")
+        try:
+            check_key(body.api_key)
+        except LLMConfigError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except LLMError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        try:
+            keys.use(body.api_key, remember=body.remember)
+        except CredentialsError as exc:
+            log.error("%s", exc)
+            raise HTTPException(500, f"The key works, but it couldn't be saved: {exc}") from exc
+        return KeyStatusView.of(keys.status())
+
+    @app.delete("/api/key")
+    def forget_key() -> KeyStatusView:
+        try:
+            keys.forget()
+        except CredentialsError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        return KeyStatusView.of(keys.status())
 
     @app.get("/api/scenarios")
     def list_scenarios() -> list[ScenarioCard]:
@@ -407,7 +491,12 @@ def create_app(
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
-        return {"version": __version__, "offline": settings.fake_llm, "model": settings.model}
+        return {
+            "version": __version__,
+            "offline": settings.fake_llm,
+            "model": settings.model,
+            "needs_key": not keys.configured,
+        }
 
     # --- pages ---
 
@@ -417,6 +506,10 @@ def create_app(
     @app.get("/", include_in_schema=False)
     def hub_page() -> Response:
         return page("index.html")
+
+    @app.get("/setup", include_in_schema=False)
+    def setup_page() -> Response:
+        return page("setup.html")
 
     @app.get("/scenarios/{scenario_id}", include_in_schema=False)
     def scenario_page(scenario_id: str) -> Response:

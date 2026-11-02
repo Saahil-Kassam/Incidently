@@ -66,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = "offline mode (placeholder output)" if settings.fake_llm else f"model {settings.model}"
     print(f"Incidently {__version__} running at {url}  ({mode}). Press Ctrl+C to stop.")
     print(f"Sessions are saved in {database.path}")
+    if not app.state.keys.configured:
+        print(f"No Anthropic API key yet: add one at {url}setup")
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, args=(url,)).start()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

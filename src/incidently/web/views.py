@@ -19,6 +19,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from ..authoring import Generated
+from ..credentials import KeyStatus, Source
 from ..engine import Hint, Turn
 from ..grading import Debrief
 from ..llm import Usage
@@ -33,6 +34,18 @@ from ..storage import (
     progress,
     summarize,
 )
+
+
+class KeyStatusView(BaseModel):
+    """Whether the app has an API key, and where it came from. Never the key itself."""
+
+    configured: bool
+    source: Source | None  # entered, saved, environment, or offline
+    hint: str | None  # the key's last four characters
+
+    @classmethod
+    def of(cls, status: KeyStatus) -> KeyStatusView:
+        return cls(configured=status.configured, source=status.source, hint=status.hint)
 
 
 class UsageView(BaseModel):

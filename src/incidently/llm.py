@@ -142,12 +142,16 @@ class AnthropicLLM:
 
     def __init__(self, settings: Settings, client: anthropic.Anthropic | None = None) -> None:
         self._model = settings.model
-        try:
-            self._client = client or anthropic.Anthropic(
-                max_retries=settings.max_retries, timeout=settings.timeout
-            )
-        except anthropic.AnthropicError as exc:
-            raise LLMConfigError(_credentials_hint(exc)) from exc
+        self._settings = settings
+        self._client = client or _client(settings)
+
+    def use_api_key(self, key: str | None) -> None:
+        """Send ``key`` with every request from now on.
+
+        None goes back to the SDK's own lookup (``ANTHROPIC_API_KEY`` and so
+        on). A request already under way finishes with the key it started with.
+        """
+        self._client = _client(self._settings, key)
 
     def generate(
         self,
@@ -279,6 +283,49 @@ class AnthropicLLM:
         return {"betas": [FALLBACK_BETA], "fallbacks": "default"}
 
 
+def _client(settings: Settings, api_key: str | None = None, **options: Any) -> anthropic.Anthropic:
+    try:
+        return anthropic.Anthropic(
+            api_key=api_key,
+            max_retries=options.get("max_retries", settings.max_retries),
+            timeout=options.get("timeout", settings.timeout),
+        )
+    except anthropic.AnthropicError as exc:
+        raise LLMConfigError(_credentials_hint(exc)) from exc
+
+
+KEY_CHECK_TIMEOUT = 20.0
+
+
+def check_api_key(settings: Settings, key: str) -> None:
+    """Raise unless ``key`` works with the configured model.
+
+    Looks the model up in the Models API, which needs a valid key but uses
+    no tokens. :class:`LLMConfigError` means the key (or the model) is the
+    problem; :class:`LLMUnavailableError` means the API couldn't be asked.
+    """
+    client = _client(settings, key, max_retries=1, timeout=KEY_CHECK_TIMEOUT)
+    try:
+        client.models.retrieve(settings.model)
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+        raise LLMConfigError(
+            "Anthropic didn't accept that key. Check that you copied all of it."
+        ) from exc
+    except anthropic.NotFoundError as exc:
+        raise LLMConfigError(
+            f"That key works, but it can't use the model {settings.model!r}. Set "
+            "INCIDENTLY_MODEL to a model your account has access to."
+        ) from exc
+    except anthropic.APIStatusError as exc:
+        raise LLMUnavailableError(
+            f"Anthropic couldn't check the key right now (HTTP {exc.status_code}). Try again."
+        ) from exc
+    except (anthropic.APIConnectionError, httpx2.TransportError) as exc:
+        raise LLMUnavailableError(
+            "Couldn't reach Anthropic to check the key. Check your connection."
+        ) from exc
+
+
 def create_llm(settings: Settings) -> StructuredLLM:
     """Return the real client, or the fake one when ``INCIDENTLY_FAKE_LLM`` is set."""
     if settings.fake_llm:
@@ -374,6 +421,7 @@ def _reply_text(message: Any) -> str:
 
 def _credentials_hint(exc: Exception) -> str:
     return (
-        "Anthropic credentials are missing or were rejected. Put ANTHROPIC_API_KEY in your "
-        f".env file (see .env.example), or set INCIDENTLY_FAKE_LLM=1 to run offline. ({exc})"
+        "Anthropic credentials are missing or were rejected. Enter a working key on the API key "
+        "page (/setup), or put ANTHROPIC_API_KEY in your .env file, or set INCIDENTLY_FAKE_LLM=1 "
+        f"to run offline. ({exc})"
     )

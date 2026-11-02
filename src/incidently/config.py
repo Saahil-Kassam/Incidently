@@ -84,6 +84,11 @@ class Settings(BaseModel):
         return (self.data_dir or default_data_dir()) / name
 
     @property
+    def api_key_path(self) -> Path:
+        """Where a key entered in the app is saved, if the player asks for that."""
+        return (self.data_dir or default_data_dir()) / "api-key"
+
+    @property
     def custom_scenarios_dir(self) -> Path:
         """The folder for generated scenarios. Offline mode's placeholders get their own."""
         name = "scenarios-offline" if self.fake_llm else "scenarios"

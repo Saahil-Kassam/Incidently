@@ -55,6 +55,10 @@ async function send(path, options) {
 }
 
 function failure(response, data) {
+  // No API key (none yet, or it was forgotten in another tab): the key page is the way forward.
+  if (response.status === 401 && location.pathname !== "/setup") {
+    location.assign(`/setup?next=${encodeURIComponent(location.pathname + location.search)}`);
+  }
   const detail = typeof data.detail === "string" ? data.detail : response.statusText;
   return new ApiError(response.status, detail);
 }
@@ -196,8 +200,10 @@ async function showMode() {
   if (!tag) return;
   try {
     const health = await api("/api/health");
-    tag.textContent = health.offline ? "Offline mode: placeholder output" : `Model: ${health.model}`;
     tag.classList.toggle("offline", health.offline);
+    tag.replaceChildren(health.offline
+      ? "Offline mode: placeholder output"
+      : el("a", { href: "/setup", title: "Change or forget your API key" }, `Model: ${health.model} · API key`));
   } catch {
     tag.textContent = "";
   }
