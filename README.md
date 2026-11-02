@@ -25,11 +25,23 @@ When you submit, you get a score and a debrief explaining the real root cause.
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e .
-copy .env.example .env    # then set ANTHROPIC_API_KEY in .env (remove the leading #)
 python -m incidently
 ```
 
 This starts the app at <http://127.0.0.1:8000> and opens it in your browser.
+The first time, it asks for your Anthropic API key (create one in the
+[Anthropic Console](https://console.anthropic.com/settings/keys)): nothing else
+opens until a key is set. The key is checked with Anthropic before it's used,
+which costs nothing. Leave **Remember this key on this computer** ticked to
+save it in your data folder (as a plain file named `api-key`, like a `.env`
+file; only you can read it on macOS and Linux), or untick it to be asked again
+the next time the app starts. The browser is only ever shown the key's last
+four characters. To change or forget the key later, use the model label in the
+top bar, or go to <http://127.0.0.1:8000/setup>.
+
+A key in `ANTHROPIC_API_KEY` (in your environment, or in a `.env` file in the
+folder you start from; see `.env.example`) skips the key page. A key entered
+in the app takes its place for as long as it's set.
 `incidently` works too, once the virtual environment is active. Options:
 `--port 8080`, `--no-browser`. Press Ctrl+C in the terminal to stop it.
 
@@ -111,6 +123,7 @@ src/incidently/             application package
   scenario.py               scenario schema (Pydantic) and validation rules
   catalog.py                loads scenario files; randomises a playthrough
   config.py                 settings from environment variables / .env
+  credentials.py            the API key: entered in the app, remembered, or from the environment
   llm.py                    the only code that calls the Anthropic API
   fake_llm.py               scripted stand-in model for tests and offline use
   offline.py                placeholder replies for offline play
@@ -128,7 +141,7 @@ src/incidently/             application package
   __main__.py               `python -m incidently`: starts the server
   web/app.py                FastAPI app: JSON API, streamed commands, pages, request checks
   web/views.py              the only shapes the browser receives
-  web/static/               hub, scenario, progress, play, and debrief pages (HTML + ES modules)
+  web/static/               API key, hub, scenario, progress, play, and debrief pages (HTML + ES modules)
   web/static/vendor/xterm/  xterm.js 5.5.0 + fit addon, vendored (MIT)
   scenarios/*.yaml          bundled incident scenarios
 tests/                      pytest suite (never calls the real API)
@@ -175,14 +188,14 @@ Settings are environment variables, read from a local `.env` file if present.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | none | Your API key (not needed with the fake model) |
+| `ANTHROPIC_API_KEY` | none | Your API key. Optional: without it, the app asks for one on first open. A signed-in `ant auth login` profile isn't detected, so enter the key in the app instead |
 | `INCIDENTLY_MODEL` | `claude-opus-5-5` | Model for every call |
 | `INCIDENTLY_TURN_EFFORT` | `low` | Effort per simulated command; favours speed |
 | `INCIDENTLY_DEEP_EFFORT` | `high` | Effort for setup, grading, and writing incidents; favours quality |
 | `INCIDENTLY_FAKE_LLM` | `0` | `1` plays offline with placeholder output and never calls the API |
 | `INCIDENTLY_API_MAX_RETRIES` | `4` | Retries for rate limits, 5xx errors, and network drops |
 | `INCIDENTLY_API_TIMEOUT` | `120` | Seconds per API request |
-| `INCIDENTLY_DATA_DIR` | per-user data folder | Where sessions and custom incidents are saved: `incidently.db` and `scenarios/`, or `incidently-offline.db` and `scenarios-offline/` for offline mode. Defaults to `%LOCALAPPDATA%\Incidently` (Windows), `~/Library/Application Support/Incidently` (macOS), or `~/.local/share/incidently` |
+| `INCIDENTLY_DATA_DIR` | per-user data folder | Where sessions, custom incidents, and a remembered API key (`api-key`) are saved: `incidently.db` and `scenarios/`, or `incidently-offline.db` and `scenarios-offline/` for offline mode. Defaults to `%LOCALAPPDATA%\Incidently` (Windows), `~/Library/Application Support/Incidently` (macOS), or `~/.local/share/incidently` |
 
 ### How a playthrough runs
 
