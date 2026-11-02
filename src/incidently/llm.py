@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, Protocol, TypeVar
 
 import anthropic
+import httpx2
 from anthropic.types.beta import BetaMessageParam
 from pydantic import BaseModel, ValidationError
 
@@ -264,6 +265,12 @@ class AnthropicLLM:
         except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
             raise LLMUnavailableError(
                 "could not reach the Anthropic API; check your connection"
+            ) from exc
+        except httpx2.TransportError as exc:
+            # The SDK wraps errors opening a request, but not a connection that
+            # drops while the reply is streaming in.
+            raise LLMUnavailableError(
+                "the connection to the Anthropic API dropped mid-reply; try again"
             ) from exc
 
     def _fallback_params(self) -> dict[str, Any]:

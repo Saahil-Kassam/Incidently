@@ -265,6 +265,7 @@ def test_refusal_is_not_retried():
             LLMUnavailableError,
             "could not reach",
         ),
+        (httpx2.ReadTimeout("slow"), LLMUnavailableError, "dropped mid-reply"),
     ],
 )
 def test_api_errors_are_translated(error, expected, match):
@@ -272,6 +273,17 @@ def test_api_errors_are_translated(error, expected, match):
     with pytest.raises(expected, match=match):
         generate(llm)
     assert len(client.calls) == 1  # SDK already retried; we don't retry again
+
+
+def test_connection_dropped_while_streaming():
+    class Dropped(_Stream):
+        def get_final_message(self):
+            raise httpx2.RemoteProtocolError("peer closed connection without sending complete body")
+
+    llm, client = make_llm()
+    client.beta.messages.stream = lambda **kwargs: Dropped(None)
+    with pytest.raises(LLMUnavailableError, match="dropped mid-reply"):
+        generate(llm)
 
 
 def test_missing_credentials_are_a_config_error():
