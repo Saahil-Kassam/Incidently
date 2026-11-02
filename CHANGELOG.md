@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-02
+
+Write your own incidents: Claude turns a theme into a checked, playable scenario.
+
 ### Added
 - New incidents from a theme: **New incident** on the hub asks for a theme and a difficulty,
   and Claude writes the hosts, root causes, grading, and hints. Each draft is checked with the
