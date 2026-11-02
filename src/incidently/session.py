@@ -15,13 +15,17 @@ from __future__ import annotations
 
 import posixpath
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from .catalog import ScenarioInstance
+from .llm import Usage
+from .pricing import total_cost
 from .replies import Assessment, Bootstrap, CommandResult, Ticket
 from .scenario import Host, Scenario, Shell
+
+CallKind = Literal["setup", "command", "hint", "grading"]
 
 # Output kept per command. Enough for grading; stops one huge listing from
 # bloating every later prompt and the saved session.
@@ -66,6 +70,26 @@ class CommandRecord(BaseModel):
     at: str = Field(default_factory=now_utc)
 
 
+class UsageRecord(BaseModel):
+    """Tokens that one kind of call used on one model, summed over the session."""
+
+    kind: CallKind
+    model: str  # the model that served the calls (a fallback model gets its own record)
+    calls: int = 0
+    input_tokens: int = 0  # uncached input only
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+    def as_usage(self) -> Usage:
+        return Usage(
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_input_tokens,
+            self.cache_creation_input_tokens,
+        )
+
+
 class Session(BaseModel):
     scenario: Scenario
     root_cause: str
@@ -81,6 +105,7 @@ class Session(BaseModel):
     started_at: str = Field(default_factory=now_utc)
     ended_at: str | None = None
     assessment: Assessment | None = None  # set once the session is graded
+    usage: list[UsageRecord] = Field(default_factory=list)  # model calls that returned a reply
 
     @classmethod
     def create(
@@ -122,6 +147,18 @@ class Session(BaseModel):
     def commands_run(self) -> int:
         """Commands the model simulated (local built-ins don't count)."""
         return sum(1 for r in self.history if not r.local)
+
+    @property
+    def total_usage(self) -> Usage:
+        total = Usage()
+        for record in self.usage:
+            total += record.as_usage()
+        return total
+
+    def estimated_cost(self) -> float | None:
+        """Estimated dollars spent so far, or None if a serving model has no known price."""
+        cost, complete = total_cost((r.model, r.as_usage()) for r in self.usage)
+        return cost if complete else None
 
     def snapshot(self) -> dict[str, Any]:
         """Compact state sent with every command. Deterministic for a given state."""
@@ -206,6 +243,18 @@ class Session(BaseModel):
         if left.shell == "cisco-ios":
             left.cli_mode = "exec"
         return self.active.name
+
+    def add_usage(self, kind: CallKind, model: str, usage: Usage) -> None:
+        """Count one model call's tokens towards the session."""
+        record = next((r for r in self.usage if r.kind == kind and r.model == model), None)
+        if record is None:
+            record = UsageRecord(kind=kind, model=model)
+            self.usage.append(record)
+        record.calls += 1
+        record.input_tokens += usage.input_tokens
+        record.output_tokens += usage.output_tokens
+        record.cache_read_input_tokens += usage.cache_read_input_tokens
+        record.cache_creation_input_tokens += usage.cache_creation_input_tokens
 
     def end(self) -> None:
         """Stop accepting commands. Idempotent: the first end time is kept."""

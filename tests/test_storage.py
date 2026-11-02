@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from incidently.llm import Usage
 from incidently.replies import Assessment, CommandResult, CriterionAssessment, StateUpdates
 from incidently.storage import (
     MIGRATIONS,
@@ -168,6 +169,7 @@ def test_attempt_summary_before_and_after_grading(db, session):
         commands=1,
         hints=0,
         graded=False,
+        cost_usd=0.0,  # no model calls recorded: nothing spent
     )
     assert attempt.status == "in_progress"
     assert attempt.duration_seconds is None
@@ -288,3 +290,61 @@ def test_summary_counts_graded_attempts_and_time(db, session):
     assert totals.pass_rate == 50
     assert totals.seconds_played == 2 * 20 * 60  # the unfinished one has no duration
     assert totals.average_percent == round((0 + 55) / 2)
+
+
+# --- usage and the version 2 migration ----------------------------------------------
+
+
+def test_usage_and_cost_are_saved_with_the_session(db, session):
+    session.add_usage("command", "claude-opus-5-5", Usage(1000, 200, 3000, 400))
+    db.save("a", session)
+    (attempt,) = db.attempts()
+    assert attempt.usage == Usage(1000, 200, 3000, 400)
+    assert attempt.cost_usd == pytest.approx(session.estimated_cost())
+
+    totals = summarize(db.attempts())
+    assert totals.usage == Usage(1000, 200, 3000, 400)
+    assert totals.cost_usd == pytest.approx(attempt.cost_usd)
+    assert totals.cost_complete
+
+
+def test_an_unknown_cost_marks_the_total_incomplete(db, session):
+    priced = session.model_copy(deep=True)
+    priced.add_usage("command", "claude-opus-5-5", Usage(1000))
+    unpriced = session.model_copy(deep=True)
+    unpriced.add_usage("command", "some-future-model", Usage(1000))
+    db.save("priced", priced)
+    db.save("unpriced", unpriced)
+
+    totals = summarize(db.attempts())
+    assert totals.cost_usd == pytest.approx(priced.estimated_cost())
+    assert not totals.cost_complete
+
+
+def test_a_version_1_file_is_upgraded_in_place(tmp_path, session):
+    path = tmp_path / "v1.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(MIGRATIONS[0])
+        conn.execute(
+            "INSERT INTO sessions VALUES "
+            "(?, ?, ?, ?, NULL, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, ?)",
+            (
+                "old",
+                session.scenario.id,
+                session.scenario.title,
+                session.started_at,
+                session.model_dump_json(exclude={"usage"}),
+            ),
+        )
+        conn.execute("PRAGMA user_version = 1")
+    conn.close()
+
+    db = Database(path)
+    with sqlite3.connect(path) as check:
+        assert check.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    (attempt,) = db.attempts()
+    assert attempt.session_id == "old"
+    assert attempt.usage == Usage() and attempt.cost_usd is None  # never recorded
+    assert summarize([attempt]).cost_complete  # nothing recorded, so nothing missing
+    assert db.load("old").usage == []
+    db.close()

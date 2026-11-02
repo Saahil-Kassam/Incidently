@@ -289,7 +289,7 @@ def create_app(
     @app.post("/api/sessions/{session_id}/commands")
     def run_command(session_id: str, body: CommandIn) -> TurnView:
         with _exclusive(store, store.get(session_id)) as session:
-            return TurnView.of(engine.run(session, body.line))
+            return TurnView.of(engine.run(session, body.line), session)
 
     @app.post("/api/sessions/{session_id}/commands/stream")
     def stream_command(session_id: str, body: CommandIn) -> StreamingResponse:
@@ -301,7 +301,7 @@ def create_app(
             try:
                 turn = engine.run(entry.session, body.line, output=events)
                 store.save(entry)
-                events.put(TurnEvent(turn=TurnView.of(turn)))
+                events.put(TurnEvent(turn=TurnView.of(turn, entry.session)))
             except StorageError as exc:
                 log.error("storage failure: %s", exc)
                 events.put(ErrorEvent(detail=f"The command ran but couldn't be saved: {exc}"))
@@ -323,7 +323,7 @@ def create_app(
             hint = engine.hint(session)
         if hint is None:
             raise HTTPException(409, "No hints left for this incident.")
-        return HintView.of(hint)
+        return HintView.of(hint, session)
 
     @app.post("/api/sessions/{session_id}/finish")
     def finish(session_id: str) -> DebriefView:

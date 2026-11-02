@@ -331,7 +331,7 @@ a.card:active { transform: scale(0.99); }
 
 /* --- dashboard --- */
 
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
 .tile {
   background: var(--panel);
   border: 1px solid var(--border);

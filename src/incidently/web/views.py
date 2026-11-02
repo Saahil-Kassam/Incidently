@@ -20,9 +20,43 @@ from pydantic import BaseModel
 
 from ..engine import Hint, Turn
 from ..grading import Debrief
+from ..llm import Usage
 from ..scenario import Scenario
 from ..session import Session
 from ..storage import Attempt, AttemptStatus, Progress, ProgressStatus, progress, summarize
+
+
+class UsageView(BaseModel):
+    """Model tokens used and their estimated cost. ``cost_usd`` is null when unknown."""
+
+    input_tokens: int  # uncached input
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    total_tokens: int
+    cached_percent: int | None  # share of all input tokens read from cache
+    cost_usd: float | None
+
+    @classmethod
+    def of(cls, usage: Usage, cost_usd: float | None) -> UsageView:
+        all_input = (
+            usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+        )
+        return cls(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_input_tokens,
+            cache_write_tokens=usage.cache_creation_input_tokens,
+            total_tokens=all_input + usage.output_tokens,
+            cached_percent=round(100 * usage.cache_read_input_tokens / all_input)
+            if all_input
+            else None,
+            cost_usd=cost_usd,
+        )
+
+    @classmethod
+    def of_session(cls, session: Session) -> UsageView:
+        return cls.of(session.total_usage, session.estimated_cost())
 
 
 class ScenarioCard(BaseModel):
@@ -95,6 +129,7 @@ class AttemptView(BaseModel):
     maximum: int | None
     percent: int | None
     grade: str | None
+    usage: UsageView
 
     @classmethod
     def of(cls, attempt: Attempt) -> AttemptView:
@@ -112,6 +147,7 @@ class AttemptView(BaseModel):
             maximum=attempt.maximum,
             percent=attempt.percent,
             grade=attempt.grade,
+            usage=UsageView.of(attempt.usage, attempt.cost_usd),
         )
 
 
@@ -152,6 +188,8 @@ class StatsView(BaseModel):
     pass_rate: int | None  # percent of graded attempts that passed
     average_percent: int | None
     seconds_played: int
+    usage: UsageView  # cost_usd sums the attempts whose cost is known
+    cost_complete: bool  # False if some attempt's cost is unknown
     skills: list[SkillView]  # most widely practised first
 
     @classmethod
@@ -178,6 +216,8 @@ class StatsView(BaseModel):
             pass_rate=totals.pass_rate,
             average_percent=totals.average_percent,
             seconds_played=totals.seconds_played,
+            usage=UsageView.of(totals.usage, totals.cost_usd),
+            cost_complete=totals.cost_complete,
             skills=sorted(skills.values(), key=lambda s: (-s.incidents, s.skill.lower())),
         )
 
@@ -218,6 +258,7 @@ class SessionView(BaseModel):
     hints_total: int
     ended: bool
     graded: bool
+    usage: UsageView
 
     @classmethod
     def of(cls, session_id: str, session: Session, prompt: str) -> SessionView:
@@ -250,6 +291,7 @@ class SessionView(BaseModel):
             hints_total=len(scenario.hints),
             ended=session.ended,
             graded=session.assessment is not None,
+            usage=UsageView.of_session(session),
         )
 
 
@@ -262,9 +304,10 @@ class TurnView(BaseModel):
     end_requested: bool
     notice: str
     ok: bool
+    usage: UsageView  # the session's running total after this turn
 
     @classmethod
-    def of(cls, turn: Turn) -> TurnView:
+    def of(cls, turn: Turn, session: Session) -> TurnView:
         return cls(
             prompt=turn.prompt,
             stdout=turn.stdout,
@@ -274,6 +317,7 @@ class TurnView(BaseModel):
             end_requested=turn.end_requested,
             notice=turn.notice,
             ok=turn.ok,
+            usage=UsageView.of_session(session),
         )
 
 
@@ -306,10 +350,16 @@ class HintView(BaseModel):
     number: int
     total: int
     text: str
+    usage: UsageView  # the session's running total after this hint
 
     @classmethod
-    def of(cls, hint: Hint) -> HintView:
-        return cls(number=hint.number, total=hint.total, text=hint.text)
+    def of(cls, hint: Hint, session: Session) -> HintView:
+        return cls(
+            number=hint.number,
+            total=hint.total,
+            text=hint.text,
+            usage=UsageView.of_session(session),
+        )
 
 
 class CheckpointView(BaseModel):
@@ -358,6 +408,7 @@ class DebriefView(BaseModel):
     ideal_path: list[str]
     commands_run: int
     hints_used: int
+    usage: UsageView
 
     @classmethod
     def of(cls, session_id: str, session: Session, debrief: Debrief) -> DebriefView:
@@ -408,4 +459,5 @@ class DebriefView(BaseModel):
             ideal_path=list(debrief.ideal_path),
             commands_run=debrief.commands_run,
             hints_used=debrief.hints_used,
+            usage=UsageView.of_session(session),
         )

@@ -1,6 +1,8 @@
 // Debrief page: the score, what was found and missed, and how an expert would have done it.
 
-import { api, el, hideOverlay, sessionIdFromPath, showBusy, showError, initChrome } from "./common.js";
+import {
+  api, el, hideOverlay, sessionIdFromPath, showBusy, showError, initChrome, usageSummary,
+} from "./common.js";
 
 const sessionId = sessionIdFromPath();
 const root = document.getElementById("debrief");
@@ -18,6 +20,7 @@ function scoreHead(d) {
         s.passed ? "Incident resolved: passed" : s.resolved ? "Not passed: a required step was missed" : "Not passed: the incident wasn't resolved"),
       el("div", { class: "muted" },
         `${s.total} / ${s.maximum} points (${s.percent}%) · ${d.commands_run} commands · ${d.hints_used} hints`),
+      el("div", { class: "muted small" }, `API usage: ${usageSummary(d.usage)}`),
     ),
   );
 }

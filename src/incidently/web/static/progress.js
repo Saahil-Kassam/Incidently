@@ -1,6 +1,8 @@
 // Progress dashboard: totals, the skills you've proven, and every attempt.
 
-import { api, attemptsTable, duration, el, errorState, initChrome, plural } from "./common.js";
+import {
+  api, attemptsTable, duration, el, errorState, formatCost, formatTokens, initChrome, plural,
+} from "./common.js";
 
 const root = document.getElementById("progress");
 
@@ -19,6 +21,18 @@ function tiles(stats) {
     tile(percent(stats.average_percent), "Average score"),
     tile(String(stats.attempts), stats.attempts === 1 ? "Attempt" : "Attempts"),
     tile(stats.seconds_played ? duration(stats.seconds_played) : "—", "Time spent on submitted attempts"),
+    costTile(stats),
+  );
+}
+
+function costTile(stats) {
+  const u = stats.usage;
+  if (!u.total_tokens) return tile("—", "Estimated API cost");
+  const cached = u.cached_percent ? `, ${u.cached_percent}% of input from cache` : "";
+  const missing = stats.cost_complete ? "" : " (some models unpriced)";
+  return tile(
+    formatCost(u.cost_usd),
+    `Estimated API cost: ${formatTokens(u.total_tokens)} tokens${cached}${missing}`,
   );
 }
 

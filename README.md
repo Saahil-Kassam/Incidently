@@ -7,10 +7,11 @@ Pick an incident from the hub, get a ticket, and troubleshoot simulated hosts
 output for every command and keeps the environment consistent as you change it.
 When you submit, you get a score and a debrief explaining the real root cause.
 
-> **Status:** v0.5.0: eight incidents across Networking and Enterprise
+> **Status:** v0.6.0: eight incidents across Networking and Enterprise
 > Systems, played in the browser with output streaming in as it is generated,
 > graded at the end, and saved so you can resume them, with search, a page per
-> incident, a progress dashboard, and light and dark themes. See the
+> incident, a progress dashboard, light and dark themes, and API usage with an
+> estimated cost for every session. See the
 > [roadmap](docs/roadmap.md) for what comes next.
 
 ## Requirements
@@ -109,6 +110,7 @@ src/incidently/             application package
   engine.py                 runs a playthrough: setup, then one call per command
   streaming.py              decodes a command's stdout while the reply streams in
   grading.py                scoring rules and the debrief
+  pricing.py                estimated cost from token usage, per model
   storage.py                saved sessions (SQLite), history and progress
   validate.py               `incidently validate`: scenario errors and house-style warnings
   __main__.py               `python -m incidently`: starts the server
@@ -230,6 +232,25 @@ Every call streams. Simulated commands pass a listener that hears the reply
 text as it arrives; if an attempt is retried or a fallback model takes over,
 the listener is told to start again and the terminal notes that the output
 was cut off before showing the new one.
+
+**Prompt caching.** Each command resends the session's system prompt (about
+1,500 tokens: the scenario, the hosts, the ticket) and the conversation so
+far, so command calls mark both for caching: one breakpoint after the system
+prompt and one after the last message before the newest command. The newest
+message, which carries the state snapshot, changes every turn and is never
+cached. Cached input costs a twentieth of the normal price on
+`claude-opus-5-5`. Old turns are dropped in chunks of ten rather than one at a
+time, so the cached prefix survives between trims. Setup, hints, and grading
+run about once per session and aren't cached, since a cache write would cost
+more than it saves.
+
+**Usage and cost.** Every call that returns a reply adds its token counts to
+the session, by kind of call and by the model that served it. The play page
+shows the running total, the debrief shows the incident's total, and Progress
+shows the total across all attempts and the cost of each one. Costs are
+estimates from published per-token prices (`incidently/pricing.py`), labelled
+"unknown" for a model without a price. Failed calls aren't counted, and
+sessions from before v0.6.0 have no usage recorded.
 
 Host simulation prompts can trip the classifier: in testing,
 `claude-opus-5-5` requests were served by `claude-opus-4-8`. The game still

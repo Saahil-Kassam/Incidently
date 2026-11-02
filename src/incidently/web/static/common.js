@@ -103,6 +103,31 @@ export const when = (iso) =>
 
 export const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+// --- model usage -------------------------------------------------------------------------------
+// Costs are estimates from published per-token prices; null means a model had no known price.
+
+export function formatTokens(n) {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+export function formatCost(usd) {
+  if (usd === null || usd === undefined) return "unknown";
+  if (usd === 0) return "$0.00";
+  return usd < 0.01 ? "under $0.01" : `~$${usd.toFixed(2)}`;
+}
+
+// "12k tokens · 74% from cache · ~$0.42", or a plain note when nothing was used.
+export function usageSummary(usage) {
+  if (!usage || usage.total_tokens === 0) return "No model tokens used";
+  return [
+    `${formatTokens(usage.total_tokens)} tokens`,
+    usage.cached_percent ? `${usage.cached_percent}% of input from cache` : null,
+    formatCost(usage.cost_usd),
+  ].filter(Boolean).join(" · ");
+}
+
 // --- attempts table (scenario page and progress page) ---------------------------------------
 
 function attemptResult(attempt) {
@@ -123,7 +148,7 @@ function attemptResult(attempt) {
 
 // `withTitle` adds the incident column, for lists that mix scenarios.
 export function attemptsTable(attempts, { withTitle = true } = {}) {
-  const columns = [withTitle && "Incident", "Started", "Time taken", "Commands", "Hints", "Result"]
+  const columns = [withTitle && "Incident", "Started", "Time taken", "Commands", "Hints", "Est. cost", "Result"]
     .filter(Boolean);
   return el("div", { class: "table-wrap" }, el("table", { class: "history" },
     el("thead", {}, el("tr", {}, columns.map((h) => el("th", { scope: "col" }, h)))),
@@ -133,6 +158,8 @@ export function attemptsTable(attempts, { withTitle = true } = {}) {
       el("td", { "data-label": "Time taken" }, duration(a.duration_seconds) || "—"),
       el("td", { class: "num", "data-label": "Commands" }, String(a.commands)),
       el("td", { class: "num", "data-label": "Hints" }, String(a.hints)),
+      el("td", { class: "num", "data-label": "Est. cost", title: usageSummary(a.usage) },
+        a.usage.total_tokens ? formatCost(a.usage.cost_usd) : "—"),
       el("td", {}, el("span", { class: "result" }, ...attemptResult(a))),
     ))),
   ));

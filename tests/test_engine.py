@@ -10,6 +10,7 @@ from incidently.llm import (
     LLMRefusalError,
     LLMResponseError,
     LLMUnavailableError,
+    Usage,
 )
 from incidently.offline import offline_reply
 from incidently.replies import (
@@ -516,3 +517,51 @@ def test_history_keeps_prompts_and_local_output_for_redrawing(play):
     assert session.history[1].stdout == "Gi0/1 up\n"
     assert session.history[2].stdout == "Connection to core-rtr1 closed.\n"
     assert session.history[3].stdout.startswith("    1  ssh core-rtr1\n")
+
+
+# --- usage --------------------------------------------------------------------------
+
+
+def test_every_reply_adds_its_usage_by_kind(settings, lab_instance, bootstrap):
+    llm = FakeLLM(bootstrap, usage=Usage(1000, 200, 500, 50), model="claude-opus-5-5")
+    engine = Engine(llm, settings)
+    session = engine.start(lab_instance)
+    llm.queue(reply("a\n"), reply("b\n"), HintReply(hint="Look closer."), graded())
+    engine.run(session, "ls")
+    engine.run(session, "pwd")
+    engine.hint(session)
+    engine.finish(session)
+
+    calls = {r.kind: r.calls for r in session.usage}
+    assert calls == {"setup": 1, "command": 2, "hint": 1, "grading": 1}
+    assert session.total_usage == Usage(5000, 1000, 2500, 250)
+    assert session.estimated_cost() > 0
+
+
+def test_failed_calls_are_not_counted(play):
+    engine, llm, session = play
+    llm.queue(LLMUnavailableError("down"))
+    engine.run(session, "ls")
+    assert session.usage == []
+
+
+def test_local_commands_use_no_tokens(play):
+    engine, _, session = play
+    engine.run(session, "history")
+    assert session.usage == []
+
+
+def test_only_command_calls_ask_for_caching(settings, lab_instance, bootstrap):
+    llm = FakeLLM(bootstrap)
+    engine = Engine(llm, settings)
+    session = engine.start(lab_instance)
+    llm.queue(reply(), HintReply(hint="h"), graded())
+    engine.run(session, "ls")
+    engine.hint(session)
+    engine.finish(session)
+    assert [(r.schema.__name__, r.cache) for r in llm.requests] == [
+        ("Bootstrap", False),
+        ("CommandResult", True),
+        ("HintReply", False),
+        ("Assessment", False),
+    ]
