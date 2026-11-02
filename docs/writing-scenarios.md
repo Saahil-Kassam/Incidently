@@ -8,6 +8,12 @@ the player types. Your job is to give it a precise, consistent blueprint.
 This guide covers the format, the rules `incidently validate` enforces, and what makes a scenario
 good to play.
 
+You don't have to start from scratch: **New incident** on the hub has Claude write a scenario
+from a theme, checked against every rule below, and saves it as YAML in your data folder
+(`%LOCALAPPDATA%\Incidently\scenarios` on Windows). Open that file to tune it, run `validate` on
+it, or copy it into `src/incidently/scenarios/` as a starting point for a bundled one (set its
+`category` first; generated ones are `Custom`).
+
 ## Quick start
 
 1. Copy a bundled scenario from `src/incidently/scenarios/` that is close to yours, for example

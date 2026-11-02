@@ -27,6 +27,7 @@ from incidently.replies import (
 )
 from incidently.storage import Database, StorageError
 from incidently.web.app import create_app
+from test_authoring import draft
 
 LAB = "lab-outage"
 NO_USAGE = {
@@ -74,7 +75,7 @@ def catalog(write_scenario, tmp_path):
     from conftest import LAB_SCENARIO
 
     write_scenario(LAB_SCENARIO)
-    return Catalog.load(tmp_path)
+    return Catalog.load(tmp_path, custom_dir=tmp_path / "custom")
 
 
 @pytest.fixture
@@ -143,6 +144,7 @@ def test_lists_scenarios(client):
         "difficulty": "beginner",
         "summary": "Users can't resolve names.",
         "skills": ["DNS", "Log analysis"],
+        "custom": False,
     }
 
 
@@ -554,6 +556,7 @@ def test_stats_before_any_attempt(client):
         "pass_rate": None,
         "average_percent": None,
         "seconds_played": 0,
+        "generations": 0,
         "usage": NO_USAGE,
         "cost_complete": True,
         "skills": [
@@ -576,6 +579,98 @@ def test_stats_after_a_pass_and_an_unfinished_attempt(client, llm, session_id, b
     assert stats["pass_rate"] == 100
     assert stats["average_percent"] > 0
     assert {s["skill"]: s["passed"] for s in stats["skills"]} == {"DNS": 1, "Log analysis": 1}
+
+
+# --- custom scenarios ---------------------------------------------------------------
+
+GEN_USAGE = Usage(input_tokens=6000, output_tokens=10000)
+
+
+def test_generating_a_scenario(catalog, database, bootstrap):
+    llm = FakeLLM(draft(), usage=GEN_USAGE, model="claude-opus-5-5")
+    client = make_client(llm, catalog, database)
+
+    response = client.post("/api/scenarios", json={"theme": " BGP flap ", "difficulty": "advanced"})
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    card = body["scenario"]
+    assert card["category"] == "Custom" and card["difficulty"] == "advanced" and card["custom"]
+    assert body["usage"]["total_tokens"] == 16000
+    assert body["usage"]["cost_usd"] == pytest.approx((6000 * 4 + 10000 * 20) / 1_000_000)
+    # No hidden fields reach the browser.
+    assert "root_cause" not in response.text and "edge-rtr1" not in response.text
+
+    listed = client.get("/api/scenarios").json()
+    assert [c["id"] for c in listed] == [LAB, card["id"]]
+    assert client.get(f"/api/scenarios/{card['id']}").json()["scenario"]["custom"]
+    stats = client.get("/api/stats").json()
+    assert stats["incidents"] == 2 and stats["generations"] == 1
+    assert stats["usage"]["cost_usd"] == pytest.approx(body["usage"]["cost_usd"])
+
+    llm.queue(bootstrap)
+    started = client.post("/api/sessions", json={"scenario_id": card["id"]})
+    assert started.status_code == 201
+    assert started.json()["hosts"][0]["name"] == "edge-rtr1"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"theme": ""}, {"theme": "   "}, {"theme": "x" * 201}, {"theme": "BGP", "difficulty": "hard"}],
+)
+def test_generation_request_is_validated(client, llm, body):
+    assert client.post("/api/scenarios", json=body).status_code == 422
+    assert llm.pending == 1  # only the session bootstrap; no model call
+
+
+def test_failed_generation_is_still_counted(catalog, database):
+    from incidently.authoring import DRAFT_ATTEMPTS
+
+    invalid = draft(start_host="nowhere")
+    llm = FakeLLM(*[invalid] * DRAFT_ATTEMPTS, usage=GEN_USAGE, model="claude-opus-5-5")
+    client = make_client(llm, catalog, database)
+
+    response = client.post("/api/scenarios", json={"theme": "BGP"})
+
+    assert response.status_code == 502
+    assert "couldn't write a usable incident" in response.json()["detail"]
+    assert len(client.get("/api/scenarios").json()) == 1
+    stats = client.get("/api/stats").json()
+    assert stats["generations"] == 1
+    assert stats["usage"]["total_tokens"] == 16000 * DRAFT_ATTEMPTS
+
+
+def test_generation_model_failure(catalog, database):
+    client = make_client(FakeLLM(LLMUnavailableError("busy")), catalog, database)
+    response = client.post("/api/scenarios", json={"theme": "BGP"})
+    assert response.status_code == 503
+    assert client.get("/api/stats").json()["generations"] == 0  # no reply, no tokens
+
+
+def test_deleting_a_custom_scenario(catalog, database, tmp_path):
+    client = make_client(FakeLLM(draft()), catalog, database)
+    scenario_id = client.post("/api/scenarios", json={"theme": "BGP"}).json()["scenario"]["id"]
+    assert (tmp_path / "custom" / f"{scenario_id}.yaml").exists()
+
+    assert client.delete(f"/api/scenarios/{scenario_id}").status_code == 204
+
+    assert not (tmp_path / "custom" / f"{scenario_id}.yaml").exists()
+    assert client.get(f"/api/scenarios/{scenario_id}").status_code == 404
+    assert client.delete(f"/api/scenarios/{scenario_id}").status_code == 404
+
+
+def test_bundled_scenarios_cannot_be_deleted(client):
+    response = client.delete(f"/api/scenarios/{LAB}")
+    assert response.status_code == 409
+    assert client.get(f"/api/scenarios/{LAB}").status_code == 200
+
+
+def test_generation_refuses_cross_origin_requests(client, llm):
+    response = client.post(
+        "/api/scenarios", json={"theme": "BGP"}, headers={"origin": "http://evil.example"}
+    )
+    assert response.status_code == 403
+    assert llm.pending == 1
 
 
 # --- pages ------------------------------------------------------------------------

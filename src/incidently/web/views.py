@@ -18,12 +18,21 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from ..authoring import Generated
 from ..engine import Hint, Turn
 from ..grading import Debrief
 from ..llm import Usage
 from ..scenario import Scenario
 from ..session import Session
-from ..storage import Attempt, AttemptStatus, Progress, ProgressStatus, progress, summarize
+from ..storage import (
+    Attempt,
+    AttemptStatus,
+    GenerationTotals,
+    Progress,
+    ProgressStatus,
+    progress,
+    summarize,
+)
 
 
 class UsageView(BaseModel):
@@ -67,9 +76,10 @@ class ScenarioCard(BaseModel):
     difficulty: str
     summary: str
     skills: list[str]
+    custom: bool  # generated from a theme, so the player can delete it
 
     @classmethod
-    def of(cls, scenario: Scenario) -> ScenarioCard:
+    def of(cls, scenario: Scenario, *, custom: bool = False) -> ScenarioCard:
         return cls(
             id=scenario.id,
             title=scenario.title,
@@ -78,6 +88,21 @@ class ScenarioCard(BaseModel):
             difficulty=scenario.difficulty,
             summary=scenario.summary,
             skills=list(scenario.skills),
+            custom=custom,
+        )
+
+
+class GeneratedView(BaseModel):
+    """A scenario just written from a theme, and what writing it cost."""
+
+    scenario: ScenarioCard
+    usage: UsageView
+
+    @classmethod
+    def of(cls, generated: Generated) -> GeneratedView:
+        return cls(
+            scenario=ScenarioCard.of(generated.scenario, custom=True),
+            usage=UsageView.of(generated.usage, generated.estimated_cost()),
         )
 
 
@@ -160,10 +185,12 @@ class ScenarioDetailView(BaseModel):
     attempts: list[AttemptView]  # newest first
 
     @classmethod
-    def of(cls, scenario: Scenario, attempts: list[Attempt]) -> ScenarioDetailView:
+    def of(
+        cls, scenario: Scenario, attempts: list[Attempt], *, custom: bool = False
+    ) -> ScenarioDetailView:
         mine = [a for a in attempts if a.scenario_id == scenario.id]
         return cls(
-            scenario=ScenarioCard.of(scenario),
+            scenario=ScenarioCard.of(scenario, custom=custom),
             description=scenario.description,
             progress=ProgressView.of(scenario.id, progress(mine).get(scenario.id)),
             attempts=[AttemptView.of(a) for a in mine],
@@ -188,16 +215,23 @@ class StatsView(BaseModel):
     pass_rate: int | None  # percent of graded attempts that passed
     average_percent: int | None
     seconds_played: int
-    usage: UsageView  # cost_usd sums the attempts whose cost is known
-    cost_complete: bool  # False if some attempt's cost is unknown
+    generations: int  # custom incidents written, including failed attempts
+    usage: UsageView  # attempts plus generations; cost_usd sums those whose cost is known
+    cost_complete: bool  # False if some attempt's or generation's cost is unknown
     skills: list[SkillView]  # most widely practised first
 
     @classmethod
-    def of(cls, scenarios: Iterable[Scenario], attempts: list[Attempt]) -> StatsView:
+    def of(
+        cls,
+        scenarios: Iterable[Scenario],
+        attempts: list[Attempt],
+        generations: GenerationTotals | None = None,
+    ) -> StatsView:
         scenarios = list(scenarios)
         records = progress(attempts)
         passed = {sid for sid, p in records.items() if p.status == "passed"}
         totals = summarize(attempts)
+        generations = generations or GenerationTotals()
 
         skills: dict[str, SkillView] = {}
         for scenario in scenarios:
@@ -216,8 +250,11 @@ class StatsView(BaseModel):
             pass_rate=totals.pass_rate,
             average_percent=totals.average_percent,
             seconds_played=totals.seconds_played,
-            usage=UsageView.of(totals.usage, totals.cost_usd),
-            cost_complete=totals.cost_complete,
+            generations=generations.generations,
+            usage=UsageView.of(
+                totals.usage + generations.usage, totals.cost_usd + generations.cost_usd
+            ),
+            cost_complete=totals.cost_complete and generations.cost_complete,
             skills=sorted(skills.values(), key=lambda s: (-s.incidents, s.skill.lower())),
         )
 

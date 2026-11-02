@@ -7,12 +7,12 @@ Pick an incident from the hub, get a ticket, and troubleshoot simulated hosts
 output for every command and keeps the environment consistent as you change it.
 When you submit, you get a score and a debrief explaining the real root cause.
 
-> **Status:** v0.6.0: eight incidents across Networking and Enterprise
-> Systems, played in the browser with output streaming in as it is generated,
-> graded at the end, and saved so you can resume them, with search, a page per
-> incident, a progress dashboard, light and dark themes, and API usage with an
-> estimated cost for every session. See the
-> [roadmap](docs/roadmap.md) for what comes next.
+> **Status:** v0.7.0: eight incidents across Networking and Enterprise
+> Systems, plus your own written by Claude from a theme, played in the
+> browser with output streaming in as it is generated, graded at the end, and
+> saved so you can resume them, with search, a page per incident, a progress
+> dashboard, light and dark themes, and API usage with an estimated cost for
+> every session. See the [roadmap](docs/roadmap.md) for what comes next.
 
 ## Requirements
 
@@ -57,6 +57,15 @@ $env:INCIDENTLY_FAKE_LLM = "1"; python -m incidently
    Grading takes up to a minute; the debrief shows your score, each checkpoint,
    risky commands, the real root cause, and how an expert would have solved it.
 
+**Write your own incidents.** On the hub, **New incident** asks for a theme
+(say, "BGP flap" or "expired certificate") and a difficulty. Claude writes the
+hosts, two or three hidden root causes, the grading, and the hints, checks the
+result with the same rules as `incidently validate`, and revises it if
+anything fails. It takes one to two minutes (about $0.25 on `claude-opus-5-5`)
+and the new incident joins the hub under **Custom**, where it plays like any
+other. Custom incidents can be deleted from their page; your attempts at them
+stay in your history.
+
 Every session is saved as you play, so you can close the app and pick up
 where you left off: the hub marks each incident *In progress*, *Passed*, or
 *Not passed yet* with your best score, and an incident's page offers to resume
@@ -74,7 +83,9 @@ and increased contrast settings are respected.
 Sessions are saved in a SQLite file in your
 user data folder (`%LOCALAPPDATA%\Incidently` on Windows; see
 `INCIDENTLY_DATA_DIR` below), and offline mode keeps a separate file, so
-placeholder sessions never count towards your progress.
+placeholder sessions never count towards your progress. Custom incidents are
+YAML files in the `scenarios` folder beside it (`scenarios-offline` in offline
+mode), so you can open, edit, and `validate` them like the bundled ones.
 
 ## Development setup
 
@@ -106,12 +117,13 @@ src/incidently/             application package
   replies.py                reply shapes the model must produce (ticket, command output)
   session.py                state of one playthrough: hosts, history, facts
   shell.py                  built-ins handled locally; shell prompts
-  prompts.py                prompt text for setup and simulation calls
+  prompts.py                prompt text for setup, simulation, grading, hints, and authoring
   engine.py                 runs a playthrough: setup, then one call per command
+  authoring.py              writes a custom scenario from a theme, checks it, revises it
   streaming.py              decodes a command's stdout while the reply streams in
   grading.py                scoring rules and the debrief
   pricing.py                estimated cost from token usage, per model
-  storage.py                saved sessions (SQLite), history and progress
+  storage.py                saved sessions and generations (SQLite), history and progress
   validate.py               `incidently validate`: scenario errors and house-style warnings
   __main__.py               `python -m incidently`: starts the server
   web/app.py                FastAPI app: JSON API, streamed commands, pages, request checks
@@ -138,7 +150,9 @@ docs/                       roadmap and the scenario authoring guide
 
 Each scenario is a YAML file named after its `id`. Every file is validated
 when the catalog loads, and an invalid one stops the app with an error naming
-the file. Each playthrough is randomised from a single seed: `{{placeholders}}`
+the file. Custom incidents (written from the hub) load from the data folder
+after the bundled ones; an invalid one there is skipped with a warning in the
+log instead, since it's your file to fix. Each playthrough is randomised from a single seed: `{{placeholders}}`
 such as site names and subnets are filled in, and one of several hidden root
 causes is chosen, so the same ticket can have a different cause each time.
 The same seed always reproduces the same playthrough.
@@ -164,11 +178,11 @@ Settings are environment variables, read from a local `.env` file if present.
 | `ANTHROPIC_API_KEY` | none | Your API key (not needed with the fake model) |
 | `INCIDENTLY_MODEL` | `claude-opus-5-5` | Model for every call |
 | `INCIDENTLY_TURN_EFFORT` | `low` | Effort per simulated command; favours speed |
-| `INCIDENTLY_DEEP_EFFORT` | `high` | Effort for setup and grading; favours quality |
+| `INCIDENTLY_DEEP_EFFORT` | `high` | Effort for setup, grading, and writing incidents; favours quality |
 | `INCIDENTLY_FAKE_LLM` | `0` | `1` plays offline with placeholder output and never calls the API |
 | `INCIDENTLY_API_MAX_RETRIES` | `4` | Retries for rate limits, 5xx errors, and network drops |
 | `INCIDENTLY_API_TIMEOUT` | `120` | Seconds per API request |
-| `INCIDENTLY_DATA_DIR` | per-user data folder | Where sessions are saved: `incidently.db`, and `incidently-offline.db` for offline mode. Defaults to `%LOCALAPPDATA%\Incidently` (Windows), `~/Library/Application Support/Incidently` (macOS), or `~/.local/share/incidently` |
+| `INCIDENTLY_DATA_DIR` | per-user data folder | Where sessions and custom incidents are saved: `incidently.db` and `scenarios/`, or `incidently-offline.db` and `scenarios-offline/` for offline mode. Defaults to `%LOCALAPPDATA%\Incidently` (Windows), `~/Library/Application Support/Incidently` (macOS), or `~/.local/share/incidently` |
 
 ### How a playthrough runs
 
@@ -222,7 +236,9 @@ Every call asks for a specific Pydantic model and uses structured outputs, so
 the reply must match its JSON schema. The reply is then validated locally. If
 it is cut off, the request is retried with a larger token limit; if it is empty
 or invalid, it is retried (three attempts in total). Rate limits, server errors,
-and network drops are retried by the Anthropic SDK with exponential backoff. If
+and network drops are retried by the Anthropic SDK with exponential backoff. A
+connection that drops while a reply is streaming in is reported as the API
+being unavailable, so the action can simply be tried again. If
 a safety classifier declines a request, the API re-runs it on a fallback model
 (`fallbacks: "default"`). When that happens the result reports the model that
 actually served it (`LLMResult.model`, `LLMResult.fell_back`), and the log line
@@ -242,12 +258,15 @@ cached. Cached input costs a twentieth of the normal price on
 `claude-opus-5-5`. Old turns are dropped in chunks of ten rather than one at a
 time, so the cached prefix survives between trims. Setup, hints, and grading
 run about once per session and aren't cached, since a cache write would cost
-more than it saves.
+more than it saves. Writing an incident caches its system prompt (the house
+rules and an example scenario, about 6,500 tokens), which every generation and
+every revision round shares.
 
 **Usage and cost.** Every call that returns a reply adds its token counts to
 the session, by kind of call and by the model that served it. The play page
 shows the running total, the debrief shows the incident's total, and Progress
-shows the total across all attempts and the cost of each one. Costs are
+shows the total across all attempts and the cost of each one, plus what
+writing custom incidents cost (failed attempts included). Costs are
 estimates from published per-token prices (`incidently/pricing.py`), labelled
 "unknown" for a model without a price. Failed calls aren't counted, and
 sessions from before v0.6.0 have no usage recorded.

@@ -113,3 +113,82 @@ def test_template_is_not_modified(scenario):
     before = scenario.model_dump()
     instantiate(scenario, seed=3)
     assert scenario.model_dump() == before
+
+
+# --- custom scenarios ------------------------------------------------------------
+
+
+def custom(scenario_data, scenario_id="my-custom"):
+    return Scenario.model_validate(dict(scenario_data, id=scenario_id, category="Custom"))
+
+
+def test_custom_scenarios_are_saved_and_reloaded(write_scenario, scenario_data, tmp_path):
+    write_scenario(scenario_data)
+    custom_dir = tmp_path / "custom"
+    catalog = Catalog.load(tmp_path, custom_dir=custom_dir)
+    assert not catalog.is_custom("test-outage")
+
+    path = catalog.add_custom(custom(scenario_data))
+
+    assert path == custom_dir / "my-custom.yaml"
+    assert catalog.is_custom("my-custom")
+    assert [s.id for s in catalog] == ["test-outage", "my-custom"]
+    assert load_scenario(path) == catalog.get("my-custom")
+    reloaded = Catalog.load(tmp_path, custom_dir=custom_dir)
+    assert reloaded.is_custom("my-custom")
+    assert reloaded.get("my-custom") == catalog.get("my-custom")
+
+
+def test_custom_multiline_text_is_written_as_blocks(write_scenario, scenario_data, tmp_path):
+    write_scenario(scenario_data)
+    catalog = Catalog.load(tmp_path, custom_dir=tmp_path / "custom")
+    scenario = custom(dict(scenario_data, simulation_notes="Line one.\nLine two."))
+    text = catalog.add_custom(scenario).read_text(encoding="utf-8")
+    assert "simulation_notes: |-\n  Line one.\n  Line two." in text
+    assert text.startswith("id: my-custom\ntitle:")  # the bundled files' field order
+
+
+def test_removing_a_custom_scenario(write_scenario, scenario_data, tmp_path):
+    write_scenario(scenario_data)
+    catalog = Catalog.load(tmp_path, custom_dir=tmp_path / "custom")
+    path = catalog.add_custom(custom(scenario_data))
+
+    catalog.remove_custom("my-custom")
+
+    assert not path.exists()
+    assert "my-custom" not in catalog and not catalog.is_custom("my-custom")
+    with pytest.raises(ScenarioError, match="not a custom scenario"):
+        catalog.remove_custom("test-outage")
+    assert "test-outage" in catalog
+
+
+def test_custom_id_must_be_new(write_scenario, scenario_data, tmp_path):
+    write_scenario(scenario_data)
+    catalog = Catalog.load(tmp_path, custom_dir=tmp_path / "custom")
+    with pytest.raises(ScenarioError, match="already in use"):
+        catalog.add_custom(custom(scenario_data, "test-outage"))
+
+
+def test_broken_or_clashing_custom_files_are_skipped(
+    write_scenario, scenario_data, tmp_path, caplog
+):
+    write_scenario(scenario_data)
+    custom_dir = tmp_path / "custom"
+    custom_dir.mkdir()
+    (custom_dir / "broken.yaml").write_text("id: [", encoding="utf-8")
+    (custom_dir / "test-outage.yaml").write_text(
+        (tmp_path / "test-outage.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    Catalog.load(tmp_path, custom_dir=custom_dir).add_custom(custom(scenario_data))
+
+    catalog = Catalog.load(tmp_path, custom_dir=custom_dir)
+
+    assert [s.id for s in catalog] == ["test-outage", "my-custom"]
+    assert not catalog.is_custom("test-outage")
+    assert "broken.yaml" in caplog.text and "id already in use" in caplog.text
+
+
+def test_a_catalog_without_a_custom_folder_cannot_add(write_scenario, scenario_data, tmp_path):
+    write_scenario(scenario_data)
+    with pytest.raises(ScenarioError, match="no folder for custom scenarios"):
+        Catalog.load(tmp_path).add_custom(custom(scenario_data))

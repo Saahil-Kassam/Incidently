@@ -124,3 +124,68 @@ class Assessment(_Reply):
     ideal_path: list[str] = Field(
         description="The commands an expert would have run on these hosts, in order"
     )
+
+
+# --- authoring ------------------------------------------------------------------
+
+
+class PlaceholderDraft(_Reply):
+    name: str = Field(description="Placeholder name in snake_case, used in text as {{name}}")
+    values: list[str] = Field(description="2-4 distinct values; one is picked per playthrough")
+
+
+class HostDraft(_Reply):
+    name: str = Field(description="Short hostname, e.g. dhcp01 or core-rtr1; unique")
+    os: str = Field(description="Operating system and version, plus the software that matters")
+    shell: Literal["bash", "powershell", "cisco-ios"]
+    role: str = Field(description="What the host does and how it relates to the other hosts")
+    ip: str
+    user: str = Field(description="Account the player is logged in as")
+    cwd: str = Field(description="Starting working directory; '' for network devices")
+
+
+class CriterionDraft(_Reply):
+    id: str = Field(description="snake_case, unique within the scenario")
+    description: str = Field(description="An observable action the grader can tie to a command")
+    points: int = Field(description="Positive; all criteria together total 100")
+    required: bool = Field(description="Must be met for the incident to count as resolved")
+
+
+class ScenarioDraft(_Reply):
+    """A new scenario written from a theme.
+
+    It mirrors :class:`incidently.scenario.Scenario` except where structured
+    outputs can't: ``randomize`` is a list of placeholders rather than a dict.
+    The id, category, and difficulty are set by the app, not the model.
+    """
+
+    title: str = Field(description="Short incident title in title case, naming the symptom")
+    topic: str = Field(description="Subject within the category, e.g. 'BGP' or 'VLANs'")
+    summary: str = Field(description="One-line symptom for the hub card. No placeholders.")
+    description: str = Field(
+        description="2-4 sentences for the scenario page: the situation, the access the player "
+        "has, and what a good outcome looks like. Never the cause. No placeholders."
+    )
+    skills: list[str] = Field(description="2-5 skills, preferring the existing vocabulary")
+    placeholders: list[PlaceholderDraft] = Field(
+        description="Values that vary between replays (sites, subnets, usernames). Every one must "
+        "be used as {{name}} somewhere, and every {{name}} used must be declared here."
+    )
+    objective: str = Field(description="What 'done' means, in the player's terms")
+    hosts: list[HostDraft] = Field(description="1-4 hosts the player can reach")
+    start_host: str = Field(description="Name of the host the terminal opens on")
+    root_cause_variants: list[str] = Field(
+        description="2-3 different faults producing the same symptom. Each: what broke and how "
+        "(specific paths, names, versions), the log lines it produces, and the correct fix with "
+        "its verification."
+    )
+    hidden_flag: str = Field(description="The evidence that proves the cause, for each variant")
+    resolution_condition: str = Field(
+        description="What must be true at the end: cause corrected, service healthy, verified"
+    )
+    grading: list[CriterionDraft] = Field(description="3-6 criteria totalling 100 points")
+    hints: list[str] = Field(description="2-4 hints from vague to specific; never the cause")
+    simulation_notes: str = Field(
+        description="Timeline, environment facts, how to treat blocking commands, destructive "
+        "shortcuts to flag, and the output formats the real tools use"
+    )

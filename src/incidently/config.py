@@ -83,6 +83,12 @@ class Settings(BaseModel):
         name = "incidently-offline.db" if self.fake_llm else "incidently.db"
         return (self.data_dir or default_data_dir()) / name
 
+    @property
+    def custom_scenarios_dir(self) -> Path:
+        """The folder for generated scenarios. Offline mode's placeholders get their own."""
+        name = "scenarios-offline" if self.fake_llm else "scenarios"
+        return (self.data_dir or default_data_dir()) / name
+
     @field_validator("fake_llm", mode="before")
     @classmethod
     def _parse_bool(cls, value: object) -> object:

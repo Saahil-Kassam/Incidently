@@ -30,9 +30,10 @@ function costTile(stats) {
   if (!u.total_tokens) return tile("—", "Estimated API cost");
   const cached = u.cached_percent ? `, ${u.cached_percent}% of input from cache` : "";
   const missing = stats.cost_complete ? "" : " (some models unpriced)";
+  const writing = stats.generations ? `, including writing ${plural(stats.generations, "custom incident")}` : "";
   return tile(
     formatCost(u.cost_usd),
-    `Estimated API cost: ${formatTokens(u.total_tokens)} tokens${cached}${missing}`,
+    `Estimated API cost: ${formatTokens(u.total_tokens)} tokens${cached}${writing}${missing}`,
   );
 }
 

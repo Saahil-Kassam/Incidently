@@ -85,9 +85,28 @@ def style_warnings(scenario: Scenario) -> list[str]:
     low, high = SKILLS_RANGE
     if not low <= len(scenario.skills) <= high:
         warnings.append(f"{len(scenario.skills)} skills; list {low} to {high}")
-    if leak := _quoted_secret(scenario):
-        warnings.append(f"the description gives away hidden text: {leak!r}")
+    if leak := leak_warning(scenario):
+        warnings.append(leak)
     return warnings
+
+
+def leak_warning(scenario: Scenario) -> str | None:
+    """The warning for a description that repeats hidden text, if it does."""
+    if leak := _quoted_secret(scenario):
+        return f"the description gives away hidden text: {leak!r}"
+    return None
+
+
+def playthrough_errors(scenario: Scenario) -> list[str]:
+    """Problems resolving a valid scenario's playthroughs. Empty for a good one."""
+    for seed in range(SEEDS):
+        try:
+            resolved = instantiate(scenario, seed=seed).scenario
+        except Exception as exc:  # any failure here is a bug in the scenario, not the checker
+            return [f"playthrough with seed {seed} doesn't resolve: {exc}"]
+        if PLACEHOLDER.search(resolved.model_dump_json()):
+            return [f"playthrough with seed {seed} still contains a placeholder"]
+    return []
 
 
 def _check(path: Path) -> Report:
@@ -102,15 +121,7 @@ def _check(path: Path) -> Report:
         report.errors.append(str(exc).removeprefix(f"{path.name}: "))
         return report
     report.scenario = scenario
-    for seed in range(SEEDS):
-        try:
-            resolved = instantiate(scenario, seed=seed).scenario
-        except Exception as exc:  # any failure here is a bug in the file, not the checker
-            report.errors.append(f"playthrough with seed {seed} doesn't resolve: {exc}")
-            break
-        if PLACEHOLDER.search(resolved.model_dump_json()):
-            report.errors.append(f"playthrough with seed {seed} still contains a placeholder")
-            break
+    report.errors = playthrough_errors(scenario)
     report.warnings = style_warnings(scenario)
     return report
 

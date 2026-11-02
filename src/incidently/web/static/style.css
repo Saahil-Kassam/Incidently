@@ -173,6 +173,8 @@ kbd {
 
 main.page { max-width: 1100px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .lead { color: var(--muted); margin: 0 0 1.75rem; max-width: 62ch; line-height: 1.55; }
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.note { font-size: 0.85rem; color: var(--accent); margin: 0; }
 
 /* --- buttons: feedback on press, not on release --- */
 
@@ -497,6 +499,18 @@ ul.plain { margin: 0; padding-left: 1.2rem; }
 }
 .overlay.open .dialog { opacity: 1; transform: none; filter: none; }
 .dialog p { margin: 0; line-height: 1.5; }
+.dialog .field { display: flex; flex-direction: column; gap: 0.4rem; }
+.dialog .field > span { font-size: 0.85rem; font-weight: 600; }
+.dialog input[type="text"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.75rem;
+  transition: border-color 150ms ease;
+}
+.dialog input[type="text"]:focus { outline: none; border-color: var(--info); box-shadow: 0 0 0 3px var(--info-soft); }
 .dialog .buttons { display: flex; gap: 0.5rem; justify-content: flex-end; flex-wrap: wrap; }
 .dialog dl.shortcuts { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; margin: 0; align-items: center; }
 .dialog dl.shortcuts dt { white-space: nowrap; font-weight: 400; }

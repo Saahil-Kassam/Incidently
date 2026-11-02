@@ -6,6 +6,10 @@ scenario file changes. Summary columns beside it (title, times, counts, and
 the score once graded) let the hub list history and progress without reading
 every session.
 
+Generating a custom scenario uses the model outside any session, so each
+generation's tokens and cost get a row of their own, and the dashboard's
+totals include them.
+
 The schema version lives in ``PRAGMA user_version``. Opening a file runs
 each migration it hasn't had yet, in its own transaction; a file from a newer
 version of Incidently is refused rather than guessed at.
@@ -26,7 +30,8 @@ from pydantic import ValidationError
 
 from .grading import debrief
 from .llm import Usage
-from .session import Session
+from .pricing import total_cost
+from .session import Session, now_utc
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +64,21 @@ MIGRATIONS = (
     ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE sessions ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE sessions ADD COLUMN cost_usd REAL;
+    """,
+    # Version 3: model usage for generating custom scenarios. scenario_id is
+    # null when generation failed (the tokens were still spent).
+    """
+    CREATE TABLE generations (
+        id                 INTEGER PRIMARY KEY,
+        created_at         TEXT NOT NULL,
+        theme              TEXT NOT NULL,
+        scenario_id        TEXT,
+        input_tokens       INTEGER NOT NULL,
+        output_tokens      INTEGER NOT NULL,
+        cache_read_tokens  INTEGER NOT NULL,
+        cache_write_tokens INTEGER NOT NULL,
+        cost_usd           REAL
+    );
     """,
 )
 
@@ -148,6 +168,16 @@ class Summary:
         return round(100 * self.passed / self.graded) if self.graded else None
 
 
+@dataclass(frozen=True)
+class GenerationTotals:
+    """Model usage summed over every scenario generation, successful or not."""
+
+    generations: int = 0
+    usage: Usage = Usage()
+    cost_usd: float = 0.0  # summed over generations with a known cost
+    cost_complete: bool = True  # False if some generation's cost is unknown
+
+
 class Database:
     """Sessions by id in one SQLite file. Safe to share between threads."""
 
@@ -231,6 +261,46 @@ class Database:
         except sqlite3.Error as exc:
             raise StorageError(f"couldn't list saved sessions: {exc}") from exc
         return [_attempt(row) for row in rows]
+
+    def record_generation(
+        self, theme: str, scenario_id: str | None, calls: Iterable[tuple[str, Usage]]
+    ) -> None:
+        """Save the tokens one scenario generation used. ``scenario_id`` is None if it failed."""
+        calls = list(calls)
+        usage = sum((u for _, u in calls), Usage())
+        cost_usd, complete = total_cost(calls)
+        row = (
+            now_utc(),
+            theme,
+            scenario_id,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+            cost_usd if complete else None,
+        )
+        try:
+            with self._lock, self._conn:
+                self._conn.execute(
+                    "INSERT INTO generations (created_at, theme, scenario_id, input_tokens, "
+                    "output_tokens, cache_read_tokens, cache_write_tokens, cost_usd) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    row,
+                )
+        except sqlite3.Error as exc:
+            raise StorageError(f"couldn't record a scenario generation: {exc}") from exc
+
+    def generation_totals(self) -> GenerationTotals:
+        try:
+            with self._lock:
+                count, *tokens, cost_usd, unknown = self._conn.execute(
+                    "SELECT COUNT(*), TOTAL(input_tokens), TOTAL(output_tokens), "
+                    "TOTAL(cache_read_tokens), TOTAL(cache_write_tokens), TOTAL(cost_usd), "
+                    "COUNT(*) - COUNT(cost_usd) FROM generations"
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageError(f"couldn't total scenario generations: {exc}") from exc
+        return GenerationTotals(count, Usage(*map(int, tokens)), cost_usd, unknown == 0)
 
     def close(self) -> None:
         with self._lock:
