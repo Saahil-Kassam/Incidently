@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-05
+
+A first-run page for your API key, so no `.env` editing is needed to start playing.
+
 ### Added
 - An API key page (`/setup`): the first time the app opens without a key, it asks for one, and
   no incident, page, or API call is reachable until a key is set (pages redirect there, the API
