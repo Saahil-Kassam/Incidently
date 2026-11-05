@@ -6,6 +6,23 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-05
+
+A first-run page for your API key, so no `.env` editing is needed to start playing.
+
+### Added
+- An API key page (`/setup`): the first time the app opens without a key, it asks for one, and
+  no incident, page, or API call is reachable until a key is set (pages redirect there, the API
+  answers 401). The key is checked with Anthropic's Models API, which costs nothing, before it's
+  used. It can be remembered in the data folder (`api-key`, owner-only on macOS and Linux) or
+  kept for the current run only, and changed or forgotten later from the top bar. The browser
+  only ever sees the key's last four characters (`incidently.credentials`;
+  `GET`/`POST`/`DELETE /api/key`).
+
+### Changed
+- `ANTHROPIC_API_KEY` is now optional: a key set there still skips the key page. Offline mode
+  never asks for a key.
+
 ## [0.7.0] - 2026-11-02
 
 Write your own incidents: Claude turns a theme into a checked, playable scenario.

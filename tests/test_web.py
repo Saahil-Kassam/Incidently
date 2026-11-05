@@ -8,6 +8,7 @@ from starlette.testclient import TestClient
 from incidently import __main__ as cli
 from incidently.catalog import Catalog
 from incidently.config import Settings
+from incidently.credentials import ApiKeys
 from incidently.engine import Engine
 from incidently.fake_llm import FakeLLM
 from incidently.llm import (
@@ -90,9 +91,19 @@ def database(tmp_path):
     database.close()
 
 
+def with_key():
+    """A key store that already has a key, so the API key page doesn't gate the app."""
+    return ApiKeys(path=None, environ_key="sk-ant-test-key")
+
+
 def make_client(llm, catalog, database):
     app = create_app(
-        Settings(), llm, catalog=catalog, database=database, allowed_hosts=["testserver"]
+        Settings(),
+        llm,
+        catalog=catalog,
+        database=database,
+        allowed_hosts=["testserver"],
+        keys=with_key(),
     )
     return TestClient(app)
 
@@ -178,7 +189,9 @@ def test_invalid_start_request_is_422(client, body):
     ],
 )
 def test_setup_failures_become_clear_http_errors(catalog, error, status, text):
-    app = create_app(Settings(), FakeLLM(error), catalog=catalog, allowed_hosts=["testserver"])
+    app = create_app(
+        Settings(), FakeLLM(error), catalog=catalog, allowed_hosts=["testserver"], keys=with_key()
+    )
     response = TestClient(app).post("/api/sessions", json={"scenario_id": LAB})
     assert response.status_code == status
     assert text in response.json()["detail"]
@@ -375,14 +388,16 @@ def test_nothing_secret_reaches_the_browser_before_grading(catalog, bootstrap, t
 
 def test_requests_for_other_hosts_are_refused(llm, catalog):
     client = TestClient(
-        create_app(Settings(), llm, catalog=catalog), base_url="http://evil.example"
+        create_app(Settings(), llm, catalog=catalog, keys=with_key()),
+        base_url="http://evil.example",
     )
     assert client.get("/api/scenarios").status_code == 400
 
 
 def test_localhost_is_allowed_by_default(llm, catalog):
     client = TestClient(
-        create_app(Settings(), llm, catalog=catalog), base_url="http://127.0.0.1:8000"
+        create_app(Settings(), llm, catalog=catalog, keys=with_key()),
+        base_url="http://127.0.0.1:8000",
     )
     assert client.get("/api/scenarios").status_code == 200
 
@@ -461,7 +476,9 @@ def test_storage_failures_are_clear_errors(client, session_id, restart, monkeypa
 
 
 def test_default_database_is_in_the_data_folder(llm, catalog, isolated_data_dir):
-    app = create_app(Settings(), llm, catalog=catalog, allowed_hosts=["testserver"])
+    app = create_app(
+        Settings(), llm, catalog=catalog, allowed_hosts=["testserver"], keys=with_key()
+    )
     TestClient(app).post("/api/sessions", json={"scenario_id": LAB})
     assert (isolated_data_dir / "incidently.db").exists()
 
@@ -671,6 +688,148 @@ def test_generation_refuses_cross_origin_requests(client, llm):
     )
     assert response.status_code == 403
     assert llm.pending == 1
+
+
+# --- the API key ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def keyless(catalog, database, tmp_path):
+    """An app with no key yet. Returns the client, the key store, and the keys checked."""
+    checked = []
+
+    def check(key):
+        checked.append(key)
+        if key == "sk-ant-bad":
+            raise LLMConfigError("Anthropic didn't accept that key.")
+        if key == "sk-ant-down":
+            raise LLMUnavailableError("Couldn't reach Anthropic to check the key.")
+
+    llm = FakeLLM()
+    store = ApiKeys(path=tmp_path / "api-key", apply=lambda key: llm.requests.clear())
+    app = create_app(
+        Settings(),
+        llm,
+        catalog=catalog,
+        database=database,
+        allowed_hosts=["testserver"],
+        keys=store,
+        check_key=check,
+    )
+    return TestClient(app), store, checked
+
+
+@pytest.mark.parametrize("path", ["/", "/progress", f"/scenarios/{LAB}", "/play/abc", "/debrief/x"])
+def test_pages_redirect_to_setup_without_a_key(keyless, path):
+    client, _, _ = keyless
+    response = client.get(path, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/setup?next={path}"
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/scenarios"),
+        ("GET", f"/api/scenarios/{LAB}"),
+        ("GET", "/api/stats"),
+        ("GET", "/api/history"),
+        ("POST", "/api/sessions"),
+        ("POST", "/api/scenarios"),
+    ],
+)
+def test_api_refuses_without_a_key(keyless, method, path):
+    client, _, _ = keyless
+    response = client.request(method, path, json={})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Add your Anthropic API key first."
+
+
+def test_setup_page_and_assets_work_without_a_key(keyless):
+    client, _, _ = keyless
+    assert "setup.js" in client.get("/setup").text
+    assert client.get("/static/style.css").status_code == 200
+    health = client.get("/api/health").json()
+    assert health["needs_key"] is True
+    assert client.get("/api/key").json() == {"configured": False, "source": None, "hint": None}
+
+
+def test_entering_a_key_unlocks_the_app(keyless, tmp_path):
+    client, store, checked = keyless
+
+    response = client.post("/api/key", json={"api_key": "  sk-ant-good-a1B2 ", "remember": True})
+
+    assert response.status_code == 200
+    assert response.json() == {"configured": True, "source": "saved", "hint": "…a1B2"}
+    assert checked == ["sk-ant-good-a1B2"]
+    assert (tmp_path / "api-key").read_text(encoding="utf-8") == "sk-ant-good-a1B2\n"
+    assert "sk-ant-good" not in response.text  # the key itself never goes back
+    assert client.get("/api/health").json()["needs_key"] is False
+    assert client.get("/api/scenarios").status_code == 200
+    assert client.get("/", follow_redirects=False).status_code == 200
+
+
+def test_a_key_can_be_kept_for_this_run_only(keyless, tmp_path):
+    client, _, _ = keyless
+    body = client.post("/api/key", json={"api_key": "sk-ant-good-a1B2", "remember": False}).json()
+    assert body["source"] == "entered"
+    assert not (tmp_path / "api-key").exists()
+
+
+@pytest.mark.parametrize(
+    ("key", "status", "detail"),
+    [("sk-ant-bad", 400, "didn't accept"), ("sk-ant-down", 503, "Couldn't reach")],
+)
+def test_a_key_that_fails_the_check_is_not_used(keyless, tmp_path, key, status, detail):
+    client, _, _ = keyless
+    response = client.post("/api/key", json={"api_key": key})
+    assert response.status_code == status
+    assert detail in response.json()["detail"]
+    assert client.get("/api/scenarios").status_code == 401
+    assert not (tmp_path / "api-key").exists()
+
+
+@pytest.mark.parametrize("body", [{"api_key": ""}, {"api_key": "   "}, {"api_key": "x" * 401}, {}])
+def test_key_request_is_validated(keyless, body):
+    client, _, checked = keyless
+    assert client.post("/api/key", json=body).status_code == 422
+    assert checked == []
+
+
+def test_forgetting_the_key_locks_the_app_again(keyless, tmp_path):
+    client, _, _ = keyless
+    client.post("/api/key", json={"api_key": "sk-ant-good-a1B2"})
+
+    assert client.delete("/api/key").json()["configured"] is False
+
+    assert not (tmp_path / "api-key").exists()
+    assert client.get("/api/scenarios").status_code == 401
+
+
+def test_key_cannot_be_set_from_another_site(keyless):
+    client, _, checked = keyless
+    response = client.post(
+        "/api/key", json={"api_key": "sk-ant-good-a1B2"}, headers={"origin": "http://evil.example"}
+    )
+    assert response.status_code == 403
+    assert checked == []
+
+
+def test_offline_mode_needs_no_key(catalog, database, tmp_path):
+    settings = Settings(fake_llm=True, data_dir=tmp_path / "data")
+    client = TestClient(
+        create_app(
+            settings,
+            FakeLLM(default=offline_reply),
+            catalog=catalog,
+            database=database,
+            allowed_hosts=["testserver"],
+        )
+    )
+    assert client.get("/api/health").json()["needs_key"] is False
+    assert client.get("/api/key").json()["source"] == "offline"
+    assert client.get("/api/scenarios").status_code == 200
+    assert client.post("/api/key", json={"api_key": "sk-ant-good-a1B2"}).status_code == 409
 
 
 # --- pages ------------------------------------------------------------------------

@@ -20,3 +20,8 @@ errors_ss/
 docs/agent-teams-*.md
 build/
 dist/
+
+# Local editor and Claude Code tooling (installed skills, launch configs)
+.vscode/
+.claude/skills/
+skills-lock.json
